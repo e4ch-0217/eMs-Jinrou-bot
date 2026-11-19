@@ -62,6 +62,7 @@ class Game:
         self.seats: list[int] = []                 # 席順(開始時にランダムで決める)
         self.custom_composition: dict[str, int] | None = None
         self.mode = Mode.FULL
+        self.mode_override: Mode | None = None     # 主催者が選んだモード(None なら人数で自動)
         self.phase = Phase.LOBBY
         self.day = 0
 
@@ -117,6 +118,8 @@ class Game:
 
     # ---------- 開始 ----------
     def preview_mode(self) -> Mode:
+        if self.mode_override is not None:
+            return self.mode_override
         return Mode.FULL if len(self.players) >= FULL_MIN_PLAYERS else Mode.ONE_NIGHT
 
     @property

@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
-from game import Game
+from game import Game, Mode
 from roles import composition_text, parse_composition
 from session import Session
 from store import Store
@@ -165,6 +165,33 @@ async def stop(interaction: discord.Interaction):
         return
     await interaction.response.send_message("ゲームを中止します。")
     await s.abort()
+
+
+@jinro.command(name="mode", description="モードを決めます(主催者のみ・開始前)")
+@app_commands.describe(choice="自動(人数で決める) / ワンナイト(何人でもワンナイトにする)")
+@app_commands.choices(choice=[
+    app_commands.Choice(name="自動(人数で決める)", value="auto"),
+    app_commands.Choice(name="ワンナイトにする", value="one_night"),
+])
+async def mode_command(interaction: discord.Interaction, choice: app_commands.Choice[str]):
+    s = client.games.get(interaction.guild_id)
+    if not s or s.started:
+        await interaction.response.send_message("参加者募集中のゲームがありません。", ephemeral=True)
+        return
+    if interaction.user.id != s.game.host_id:
+        await interaction.response.send_message("主催者だけが変更できます。", ephemeral=True)
+        return
+    if choice.value == "one_night":
+        s.game.mode_override = Mode.ONE_NIGHT
+        text = "モードを**ワンナイト**にしました(人数に関係なく、ワンナイトで遊びます)。"
+    else:
+        s.game.mode_override = None
+        text = "モードを**自動**(人数で決める)に戻しました。"
+    s.game.custom_composition = None   # ワンナイトの役職は、自動の構成で作り直す
+    await interaction.response.send_message(text)
+    if s.lobby_message:
+        with contextlib.suppress(discord.HTTPException):
+            await s.lobby_message.edit(embed=s.lobby_embed())
 
 
 @client.tree.command(name="pt", description="自分の残高(ポイント)を表示します")

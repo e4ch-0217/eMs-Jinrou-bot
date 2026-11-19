@@ -302,6 +302,17 @@ def test_mark_left_and_madman_note():
     assert 3 not in g.survey_notes
 
 
+def test_host_can_force_one_night_with_many_players():
+    from game import Mode
+    g = make_game(10)
+    g.mode_override = Mode.ONE_NIGHT
+    g.custom_composition = None
+    assert g.preview_mode() == Mode.ONE_NIGHT
+    assert g.composition_error() is None
+    g.mode_override = None
+    assert g.preview_mode() == Mode.FULL
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
