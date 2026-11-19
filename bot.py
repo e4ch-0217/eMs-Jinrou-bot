@@ -1,0 +1,184 @@
+"""Discord 人狼Bot の入り口。ロビー・コマンド・ボイスの監視を担当します。"""
+from __future__ import annotations
+
+import contextlib
+import logging
+import os
+
+import discord
+from discord import app_commands
+from dotenv import load_dotenv
+
+from game import Game
+from roles import composition_text, parse_composition
+from session import Session
+from store import Store
+
+load_dotenv()
+log = logging.getLogger("jinro")
+
+TOKEN = os.getenv("DISCORD_TOKEN")
+GUILD_ID = os.getenv("DISCORD_GUILD_ID")
+
+
+class JinroBot(discord.Client):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.members = True        # 参加者のVC状態を見るため(Developer Portal でオンにする)
+        intents.voice_states = True
+        super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
+        self.games: dict[int, Session] = {}
+        self.store = Store()
+
+    async def setup_hook(self) -> None:
+        if GUILD_ID:  # サーバーを指定すると、コマンドがすぐ反映される
+            guild = discord.Object(id=int(GUILD_ID))
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+        else:
+            await self.tree.sync()
+
+    async def on_ready(self) -> None:
+        log.info("ログインしました: %s", self.user)
+
+    async def on_voice_state_update(self, member: discord.Member, before, after) -> None:
+        s = self.games.get(member.guild.id)
+        if s is None:
+            return
+        was_in = bool(before.channel and before.channel.id == s.vc.id)
+        now_in = bool(after.channel and after.channel.id == s.vc.id)
+        if was_in != now_in:
+            await s.on_voice_change(member.id, joined=now_in)
+
+
+client = JinroBot()
+
+
+class LobbyView(discord.ui.View):
+    def __init__(self, session: Session):
+        super().__init__(timeout=None)
+        self.session = session
+
+    @discord.ui.button(label="参加する", style=discord.ButtonStyle.success, emoji="✋")
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        s = self.session
+        if s.started:
+            await interaction.response.send_message("すでに開始しています。", ephemeral=True)
+        elif not s.game.add_player(interaction.user.id, interaction.user.display_name):
+            await interaction.response.send_message("すでに参加しているか、満員です。", ephemeral=True)
+        else:
+            await interaction.response.edit_message(embed=s.lobby_embed(), view=self)
+
+    @discord.ui.button(label="退出する", style=discord.ButtonStyle.secondary)
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        s = self.session
+        if s.started:
+            await interaction.response.send_message("すでに開始しています。", ephemeral=True)
+        elif interaction.user.id == s.game.host_id:
+            await interaction.response.send_message(
+                "主催者は退出できません。中止するときは `/jinro stop` を使ってください。", ephemeral=True)
+        else:
+            s.game.remove_player(interaction.user.id)
+            await interaction.response.edit_message(embed=s.lobby_embed(), view=self)
+
+    @discord.ui.button(label="ゲーム開始", style=discord.ButtonStyle.primary, emoji="🎮")
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        s = self.session
+        if interaction.user.id != s.game.host_id:
+            await interaction.response.send_message("開始できるのは主催者だけです。", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        await s.start_game(interaction)
+
+
+jinro = app_commands.Group(name="jinro", description="人狼ゲームの操作", guild_only=True)
+
+
+@jinro.command(name="create", description="参加者を募集します(主催者はゲーム用のVCに入ってから実行)")
+async def create(interaction: discord.Interaction):
+    if client.games.get(interaction.guild_id):
+        await interaction.response.send_message(
+            "このサーバーではすでにゲームの準備中か進行中です。`/jinro stop` で中止できます。", ephemeral=True)
+        return
+    if not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.response.send_message("通常のテキストチャンネルで実行してください。", ephemeral=True)
+        return
+    voice = getattr(interaction.user, "voice", None)
+    if not voice or not voice.channel:
+        await interaction.response.send_message(
+            "先にゲームで使うVCに入ってから実行してください(VCは必須です)。", ephemeral=True)
+        return
+
+    game = Game(interaction.guild_id, interaction.channel_id, interaction.user.id)
+    game.add_player(interaction.user.id, interaction.user.display_name)
+    session = Session(client, interaction.guild, interaction.channel, voice.channel, game,
+                      client.store, interaction.user.display_name)
+    client.games[interaction.guild_id] = session
+
+    perms = interaction.guild.me.guild_permissions
+    missing = [label for ok, label in (
+        (perms.manage_channels, "チャンネルの管理(天国・人狼の部屋用)"),
+        (perms.manage_roles, "ロールの管理(VCで参加者以外を話せなくするため)"),
+        (perms.mute_members, "メンバーをミュート(自動ミュート用)")) if not ok]
+    note = ("⚠️ Botに次の権限がないため、一部の機能が使えません: " + "、".join(missing)) if missing else None
+
+    await interaction.response.send_message(content=note, embed=session.lobby_embed(), view=LobbyView(session))
+    session.lobby_message = await interaction.original_response()
+
+
+@jinro.command(name="roles", description="役職構成を手動で決めます(主催者のみ・開始前)")
+@app_commands.describe(setting="例: 人狼2 占い師1 騎士1 市民3 (空欄で、人数に合わせた自動構成に戻す)")
+async def roles_command(interaction: discord.Interaction, setting: str = ""):
+    s = client.games.get(interaction.guild_id)
+    if not s or s.started:
+        await interaction.response.send_message("参加者募集中のゲームがありません。", ephemeral=True)
+        return
+    if interaction.user.id != s.game.host_id:
+        await interaction.response.send_message("主催者だけが変更できます。", ephemeral=True)
+        return
+    if not setting.strip():
+        s.game.custom_composition = None
+        await interaction.response.send_message("役職構成を自動(人数に合わせる)に戻しました。")
+    else:
+        try:
+            s.game.custom_composition = parse_composition(setting)
+        except ValueError as e:
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "役職構成を設定しました: " + composition_text(s.game.custom_composition)
+            + "\n※合計が参加人数と合わない場合は開始できません。")
+    if s.lobby_message:
+        with contextlib.suppress(discord.HTTPException):
+            await s.lobby_message.edit(embed=s.lobby_embed())
+
+
+@jinro.command(name="stop", description="ゲームを中止します(主催者・サーバー管理者のみ)")
+async def stop(interaction: discord.Interaction):
+    s = client.games.get(interaction.guild_id)
+    if not s:
+        await interaction.response.send_message("中止できるゲームがありません。", ephemeral=True)
+        return
+    if interaction.user.id != s.game.host_id and not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message("主催者かサーバー管理者だけが中止できます。", ephemeral=True)
+        return
+    await interaction.response.send_message("ゲームを中止します。")
+    await s.abort()
+
+
+@client.tree.command(name="pt", description="自分の残高(ポイント)を表示します")
+@app_commands.guild_only()
+async def pt_command(interaction: discord.Interaction):
+    bal = client.store.balance(interaction.guild_id, interaction.user.id)
+    await interaction.response.send_message(f"💰 残高: **{bal}pt**", ephemeral=True)
+
+
+client.tree.add_command(jinro)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    if not TOKEN:
+        raise SystemExit("DISCORD_TOKEN が設定されていません。.env ファイルを確認してください。")
+    client.run(TOKEN)
