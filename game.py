@@ -257,6 +257,8 @@ class Game:
 
     def resolve_night(self) -> NightResult:
         """襲撃先を決める。護衛が当たっていれば victim は None。"""
+        if self.one_night:                       # 簡略化人狼は、夜が1回だけで、襲撃はしない
+            return NightResult(None, self.guard_target, None, self.divine)
         pool = [p.user_id for p in self.alive_players() if p.role != "人狼"]
         attack: int | None = None
         if self.attack_votes:

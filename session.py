@@ -17,7 +17,7 @@ from handlers import Handlers
 import note_rules as NR
 from roles import ROLES, SURVEY_ROLES
 from collections import Counter
-from views import (COView, CloseNowView, ConfirmVoteView, DayView, GameView, HopeView, JumpView, NightView,
+from views import (COView, CloseNowView, SpectateView, ConfirmVoteView, DayView, GameView, HopeView, JumpView, NightView,
                    NoteVoteView, SpeakEndView, TieVoteView)
 
 log = logging.getLogger("jinro")
@@ -244,7 +244,8 @@ class Session(Handlers):
                 topic="ゲームの進行(自動で流れます)")
             self.channel = self.game_channel
             mentions = " ".join(f"<@{uid}>" for uid in self.game.players)
-            await origin.send(f"{mentions}\n🐺 ゲームの進行は {self.game_channel.mention} で行います。そちらを見てください。")
+            await origin.send(f"{mentions}\n🐺 ゲームの進行は {self.game_channel.mention} で行います。そちらを見てください。",
+                              view=SpectateView(self))
         except discord.HTTPException:
             self.channel = origin
             await origin.send("⚠️ 進行用のチャンネルを作れませんでした。このチャンネルで進めます。")
@@ -296,6 +297,7 @@ class Session(Handlers):
             elif g.one_night:
                 g.day = 1
                 await self.night()
+                await self.morning()                         # 襲撃された人の死亡とアナウンス
                 executed = await self.day_and_vote()
                 winner = g.one_night_winner(executed)
             else:
@@ -540,7 +542,7 @@ class Session(Handlers):
     async def vote_turn(self, voter: int) -> None:
         g = self.game
         await self.channel.send(
-            f"🗳️ <@{voter}> さんの番です。",
+            f"🗳️ <@{voter}> さんの番です。({C.VOTE_CONFIRM_SECONDS}秒以内)",
             view=ConfirmVoteView(self, voter, C.VOTE_CONFIRM_SECONDS + 5))
         for _ in range(C.VOTE_CONFIRM_SECONDS):
             if voter in self.votes:

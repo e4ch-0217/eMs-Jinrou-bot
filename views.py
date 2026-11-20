@@ -140,6 +140,18 @@ class ConfirmLeaveView(discord.ui.View):
         await interaction.response.edit_message(content="続けます。", view=None)
 
 
+class SpectateView(discord.ui.View):
+    """案内メッセージの「観戦する」ボタン。"""
+
+    def __init__(self, session):
+        super().__init__(timeout=None)
+        self.session = session
+
+    @discord.ui.button(label="観戦する", style=discord.ButtonStyle.secondary, emoji="👀")
+    async def spectate(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.session.join_spectators(interaction)
+
+
 class CloseNowView(discord.ui.View):
     """終了後、主催者が天国・進行・人狼の巣をすぐ閉じるボタン。"""
 
