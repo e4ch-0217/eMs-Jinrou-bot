@@ -4,7 +4,7 @@
 - 各自の取り分(raw)を計算する。
 - 配る合計は「払われた参加費の合計 × 95%」まで。超えたら、払った人全員の取り分を同じ割合で減らす。
 - 免除者(参加費を払っていない人)の取り分は上限に入れず、そのまま払う(通貨がわずかに増える)。
-- 凸死した人は、役職ボーナスと、死ぬまでの生存日数だけ受け取る(陣営勝利・生還はなし)。
+- 突然死した人は、役職ボーナスと、抜けた夜より前の生存日数だけ受け取る(陣営勝利・生還はなし)。
 """
 from __future__ import annotations
 
@@ -50,9 +50,9 @@ class Result:
     uid: int
     team: str                 # "village" / "wolf"
     team_won: bool
-    nights_survived: int      # 夜を越えた回数(凸死なら、抜けるまで)
+    nights_survived: int      # 夜を越えた回数(突然死なら、抜けるまで)
     survived_to_end: bool     # 最後まで生存したか
-    quit_early: bool          # 凸死したか
+    quit_early: bool          # 突然死したか
     role_bonus: int = 0       # 役職ボーナスの合計(計算済み)
     left: bool = False        # 自分から途中で抜けたか(報酬なし・参戦費は返さない)
 

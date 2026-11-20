@@ -42,7 +42,7 @@ class Player:
     kills: int = 0            # 人狼: 襲撃に成功した回数
     gj: int = 0               # 騎士: 襲撃を防いだ回数
     votes_received: int = 0   # 処刑投票で入った票の合計
-    quit_early: bool = False  # 凸死したか(VCに戻らなかった)
+    quit_early: bool = False  # 突然死したか(VCに戻らなかった)
     left: bool = False        # 自分から途中で抜けたか(報酬なし・参戦費は返さない)
 
 
@@ -108,7 +108,7 @@ class Game:
         self.players[user_id].alive = False
 
     def mark_quit(self, user_id: int) -> None:
-        """凸死(VCから戻らなかった)。以後は死亡扱い。"""
+        """突然死(VCから戻らなかった)。以後は死亡扱い。"""
         p = self.players[user_id]
         p.quit_early = True
         p.alive = False

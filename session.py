@@ -51,6 +51,7 @@ class Session(Handlers):
         self.wolf_channel: discord.TextChannel | None = None
         self.task: asyncio.Task | None = None
         self.started = self.finished = self.cleaned = False
+        self.spectate_msg: discord.Message | None = None  # 観戦ボタンのメッセージ(終わったら消す)
         self.close_now = asyncio.Event()           # 主催者が「今すぐ閉じる」を押した
         self.ending_early = False                   # 即終了・人狼全滅での終了中(中止の表示を出さない)
 
@@ -58,7 +59,9 @@ class Session(Handlers):
         self.note_choices: dict[int, int | None] = {}              # ワンナイト人狼の夜の選択
         self.note_votes: dict[int, int] = {}
         self.note_vote_done = asyncio.Event()
-        self.quit_tasks: dict[int, asyncio.Task] = {}
+        # VCから抜けた人 -> 抜けた時点の生存夜数(次の朝の発表までに戻らなければ突然死)
+        self.absent: dict[int, int] = {}
+        self.roles_ready = False        # 役職が配られたあと(それまでのVCの出入りは、配布後にまとめて見る)
 
         # 夜
         self.pending_night: set[int] = set()
@@ -245,7 +248,7 @@ class Session(Handlers):
             self.channel = self.game_channel
             mentions = " ".join(f"<@{uid}>" for uid in self.game.players)
             await origin.send(f"{mentions}\n🐺 ゲームの進行は {self.game_channel.mention} で行います。そちらを見てください。",
-                              view=SpectateView(self))
+                              )
         except discord.HTTPException:
             self.channel = origin
             await origin.send("⚠️ 進行用のチャンネルを作れませんでした。このチャンネルで進めます。")
@@ -274,6 +277,10 @@ class Session(Handlers):
             await self.channel.send("⚠️ チャンネルを作れませんでした。天国と人狼の部屋なしで進めます。")
         if self.heaven:
             await self.to_heaven("👀 **天国へようこそ。** 全員の役職です。\n" + g.role_summary())
+            with contextlib.suppress(discord.HTTPException):   # 天国ができてから、観戦ボタンを出す
+                self.spectate_msg = await self.origin.send(
+                    "👀 天国ができました。観戦する人は、下のボタンを押してください。",
+                    view=SpectateView(self))
 
     # ================================================================
     # 全体の流れ
@@ -286,9 +293,13 @@ class Session(Handlers):
                 g.assign_note_roles()                       # ワンナイト人狼: 希望役職はなし
             else:
                 await self.hope_phase()
+            self.roles_ready = True
             await self.setup_channels()
             await self.lock_vc()
             await self.channel.send(embed=self.game_embed(), view=GameView(self))
+            await self.sweep_absent()
+            if self.finished:
+                return
             if g.mode == Mode.NOTE:
                 g.day = 1
                 await self.note_night()
@@ -298,6 +309,8 @@ class Session(Handlers):
                 g.day = 1
                 await self.night()
                 await self.morning()                         # 襲撃された人の死亡とアナウンス
+                if self.finished:
+                    return                                   # 夜明けの突然死で、もう終わっている
                 executed = await self.day_and_vote()
                 winner = g.one_night_winner(executed)
             else:
@@ -311,6 +324,8 @@ class Session(Handlers):
                         break
                     await self.night()
                     await self.morning()
+                    if self.finished:
+                        return                               # 夜明けの突然死で、もう終わっている
                     winner = g.check_winner()
                     if winner:
                         break
@@ -438,20 +453,37 @@ class Session(Handlers):
         g.phase = Phase.DAY
         res = self.last_night
         await self.apply_voice("day")
-        if res and res.victim is not None:
-            victim = res.victim
-            await self.channel.send(embed=discord.Embed(
-                title="☀️ おはようございます",
-                description=(f"昨夜、**{g.players[victim].name}** が襲撃されました。\n"
-                             f"({C.VICTIM_WILL_SECONDS}秒、進行に関係ないことだけ話せます)"),
-                color=discord.Color.gold()))
+        victim = res.victim if (res and res.victim is not None) else None
+        # 次の朝までVCに戻らなかった人(襲撃された人は除く)
+        gone = [uid for uid in list(self.absent) if uid != victim
+                and g.players[uid].alive and not self.in_vc(self.member(uid))]
+        if victim is not None:
+            desc = (f"昨夜、**{g.players[victim].name}** が襲撃されました。\n"
+                    f"({C.VICTIM_WILL_SECONDS}秒、進行に関係ないことだけ話せます)")
+        else:
+            desc = "昨夜は誰も犠牲になりませんでした。"
+        if gone:
+            desc += "\n\n🔌 次の朝までVCに戻らなかったため、**突然死**になりました: " + \
+                    "、".join(g.players[u].name for u in gone)
+        await self.channel.send(embed=discord.Embed(
+            title="☀️ おはようございます", description=desc, color=discord.Color.gold()))
+        if victim is not None:
             await self.speak(victim, C.VICTIM_WILL_SECONDS)
             await self.kill(victim)
         else:
-            await self.channel.send(embed=discord.Embed(
-                title="☀️ おはようございます", description="昨夜は誰も犠牲になりませんでした。",
-                color=discord.Color.gold()))
             await asyncio.sleep(C.MORNING_SECONDS)
+        for uid in gone:
+            nights = self.absent.pop(uid, None)
+            p = g.players[uid]
+            if nights is not None:
+                p.nights = nights                         # 抜けた夜より後は数えない
+            g.mark_quit(uid)
+            await self.to_heaven(f"🔌 {p.name} が突然死しました。")
+        for uid in list(self.absent):                     # 戻った・死んだ人の記録は消す
+            if not g.players[uid].alive:
+                self.absent.pop(uid, None)
+        if gone:
+            await self.check_outcome()
 
     # ---------- 昼 ----------
     async def day_and_vote(self) -> int:
@@ -588,38 +620,59 @@ class Session(Handlers):
         await self.to_heaven(f"⚖️ 処刑: {g.players[uid].name}({g.players[uid].role})")
 
     # ================================================================
-    # 凸死(VCから戻らない)
+    # 突然死(VCから戻らない)
     # ================================================================
     async def on_voice_change(self, uid: int, joined: bool) -> None:
-        if not self.started or self.finished or not self.is_player(uid):
+        if not self.started or not self.roles_ready or self.finished or not self.is_player(uid):
             return
         p = self.game.players[uid]
-        if p.quit_early or p.left:
+        if p.quit_early or p.left or not p.alive:
             return
         if joined:
-            task = self.quit_tasks.pop(uid, None)
-            if task:
-                task.cancel()
+            self.absent.pop(uid, None)                           # 次の朝より前に戻れば、突然死なし
             await self.set_mute(uid, self._should_mute(uid))     # 戻ったときの状態に合わせる
-        elif p.alive and uid not in self.quit_tasks:
-            self.quit_tasks[uid] = asyncio.create_task(self.quit_timer(uid))
+        elif uid not in self.absent:
+            if self.game.one_night:
+                await self.quit_now(uid)                         # 夜が1回だけのゲームは、その場で突然死
+            else:
+                self.absent[uid] = p.nights                      # 次の朝の発表で判定する
 
-    async def quit_timer(self, uid: int) -> None:
-        try:
-            await asyncio.sleep(C.QUIT_GRACE_SECONDS)
-        except asyncio.CancelledError:
-            return
-        self.quit_tasks.pop(uid, None)
+    async def sweep_absent(self) -> None:
+        """役職が配られた時点で、VCにいない人を、抜けた人として扱う。"""
+        for uid, p in list(self.game.players.items()):
+            if p.alive and not self.in_vc(self.member(uid)):
+                if self.game.one_night:
+                    await self.quit_now(uid)
+                else:
+                    self.absent.setdefault(uid, p.nights)
+
+    async def quit_now(self, uid: int) -> None:
         p = self.game.players[uid]
         if not p.alive or self.finished or self.in_vc(self.member(uid)):
             return
         self.game.mark_quit(uid)
-        await self.channel.send(f"🔌 **{p.name}** さんがVCに戻らなかったため、凸死になりました。")
-        await self.to_heaven(f"🔌 {p.name} が凸死しました。")
+        self.absent.pop(uid, None)
+        await self.channel.send(f"🔌 **{p.name}** さんがVCから戻らなかったため、突然死になりました。")
+        await self.to_heaven(f"🔌 {p.name} が突然死しました。")
         await self.check_outcome()
 
+    def close_note(self) -> str:
+        """結果の画面に出す、「今すぐ閉じる」の説明。"""
+        if self.can_close_now(None):
+            host = self.game.players.get(self.game.host_id)
+            if host is not None and host.left and not host.quit_early:
+                return "⚠️ 主催者がゲームから抜けたので、誰でも「今すぐ閉じる」が押せるようになりました。"
+            return "⚠️ 主催者が突然死したので、誰でも「今すぐ閉じる」が押せるようになりました。"
+        return "🧹 「今すぐ閉じる」は、主催者だけが押せます。"
+
+    def can_close_now(self, uid: int | None) -> bool:
+        """uid=None なら、今「誰でも」押せるかどうか。"""
+        host = self.game.players.get(self.game.host_id)
+        host_gone = host is not None and (host.quit_early or host.left)
+        return host_gone or (uid is not None and uid == self.game.host_id)
+
     async def check_outcome(self) -> None:
-        """抜けた・凸死したあとに呼ぶ。人狼が全員いなくなったら村人の勝ち。生きている人が3人未満なら即終了。"""
+        """抜けた・突然死したあとに呼ぶ。人狼が全員いなくなったら村人の勝ち。生きている人が3人未満なら即終了。"""
         if not self.started or self.finished:
             return
         g = self.game
@@ -654,15 +707,13 @@ class Session(Handlers):
         await self.stop_task_for_end()
         with contextlib.suppress(discord.HTTPException):
             await self.channel.send("⚠️ 参加者が足りなくなったため、ゲームを終了します。"
-                                    "最後まで残った人には参戦費を返しました(報酬はありません)。",
+                                    "最後まで残った人には参戦費を返しました(報酬はありません)。\n" + self.close_note(),
                                     view=CloseNowView(self))
 
     async def leave_game(self, uid: int) -> None:
         """自分から途中で抜ける(退出)。報酬なし・参戦費は返さない。"""
         p = self.game.players[uid]
-        task = self.quit_tasks.pop(uid, None)
-        if task:
-            task.cancel()
+        self.absent.pop(uid, None)
         self.game.mark_left(uid)
         self.pending_night.discard(uid)
         await self.set_mute(uid, True)
@@ -791,10 +842,11 @@ class Session(Handlers):
         embed = discord.Embed(title=title, description="**全員の役職**\n" + g.role_summary(),
                               color=discord.Color.green())
         lines = [f"・{g.players[u].name}{'' if u in self.payers else '(免除)'}"
-                 f"{'(凸死)' if g.players[u].quit_early else ''}{'(退出)' if g.players[u].left else ''}: +{a}pt" for u, a in s.final.items()]
+                 f"{'(突然死)' if g.players[u].quit_early else ''}{'(退出)' if g.players[u].left else ''}: +{a}pt" for u, a in s.final.items()]
         embed.add_field(name=f"💰 ポイント(還元率 {round(s.ratio * 100)}%)",
                         value="\n".join(lines)[:1000], inline=False)
         embed.add_field(name="📋 COの記録", value=g.history_text()[:1000], inline=False)
+        embed.add_field(name="🧹 チャンネルについて", value=self.close_note(), inline=False)
         await self.channel.send(embed=embed, view=CloseNowView(self))
 
     def refund(self) -> None:
@@ -813,14 +865,15 @@ class Session(Handlers):
         if self.cleaned:
             return
         self.cleaned = True
-        for t in self.quit_tasks.values():
-            t.cancel()
         await self.unlock_vc()
         await asyncio.gather(*(self.set_mute(uid, False) for uid in self.game.players))
         for m in [self.member(u) for u in self.game.players]:
             if m:
                 with contextlib.suppress(discord.HTTPException):
                     await self.channel.set_permissions(m, overwrite=None)
+        if self.spectate_msg:
+            with contextlib.suppress(discord.HTTPException):
+                await self.spectate_msg.delete()
         channels = [c for c in (self.game_channel, self.wolf_channel, self.heaven) if c]
         for c in channels:
             with contextlib.suppress(discord.HTTPException):

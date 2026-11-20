@@ -241,7 +241,7 @@ def res(uid, team="village", won=False, nights=0, end=False, quit_=False, bonus=
 
 def test_raw_payout():
     assert points.raw_payout(res(1, won=True, nights=3, end=True), points.FULL) == 120 + 20 + 15
-    # 凸死: 陣営勝利・生還はなし。役職ボーナスと生存日数だけ
+    # 突然死: 陣営勝利・生還はなし。役職ボーナスと生存日数だけ
     assert points.raw_payout(res(1, won=True, nights=2, quit_=True, bonus=30), points.FULL) == 30 + 10
 
 

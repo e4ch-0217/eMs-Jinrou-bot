@@ -153,7 +153,7 @@ class SpectateView(discord.ui.View):
 
 
 class CloseNowView(discord.ui.View):
-    """終了後、主催者が天国・進行・人狼の巣をすぐ閉じるボタン。"""
+    """終了後、天国・進行・人狼の巣をすぐ閉じるボタン。主催者だけ。主催者が突然死・退出したあとは、誰でも押せる。"""
 
     def __init__(self, session):
         super().__init__(timeout=None)
@@ -161,7 +161,7 @@ class CloseNowView(discord.ui.View):
 
     @discord.ui.button(label="今すぐ閉じる", style=discord.ButtonStyle.secondary, emoji="🧹")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.session.game.host_id:
+        if not self.session.can_close_now(interaction.user.id):
             await interaction.response.send_message("主催者だけが押せます。", ephemeral=True)
             return
         self.session.close_now.set()
