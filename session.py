@@ -794,7 +794,7 @@ class Session(Handlers):
         peace = not note.wolves()
         msg = await self.channel.send(embed=discord.Embed(
             title=f"🗳️ 投票({C.NOTE_VOTE_SECONDS}秒)",
-            description=("1人1票で、人狼だと思う人に投票してください。"
+            description=("1人1票で、追放したい人に投票してください。"
                          + ("\n墓地は2枚とも人狼です。プレイヤーに人狼はいません。「平和村を願う」に投票できます。" if peace else "")),
             color=discord.Color.red()), view=NoteVoteView(self))
         await wait_event(self.note_vote_done, C.NOTE_VOTE_SECONDS)
