@@ -147,7 +147,7 @@ class Handlers:
             return
         if p.role == "占い師":
             options = [(t.user_id, t.name) for t in g.players.values() if t.user_id != uid]
-            options += [(-1, "墓地の1枚目"), (-2, "墓地の2枚目")]
+            options += [(-1, "墓地の2枚(両方)")]
 
             async def on_pick(i: discord.Interaction, target: int) -> None:
                 text = self.note_seer(uid, target)
@@ -186,8 +186,6 @@ class Handlers:
             await deny(interaction, "すでに投票しています。")
             return
         options = [(t.user_id, t.name) for t in g.players.values() if t.alive and t.user_id != uid]
-        if not note.wolves():
-            options.append((PEACE_ID, "平和村を願う"))
 
         async def on_pick(i: discord.Interaction, target: int) -> None:
             self.note_votes[uid] = target

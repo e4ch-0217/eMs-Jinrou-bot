@@ -136,13 +136,15 @@ class Game:
 
     def composition_error(self) -> str | None:
         if self.preview_mode() == Mode.NOTE:
+            if len(self.players) > NR.MAX_PLAYERS:
+                return f"ワンナイト人狼は{NR.MAX_PLAYERS}人までです(現在{len(self.players)}人)。"
             return None
         return validate_composition(
             self.composition(), len(self.players), self.preview_mode() == Mode.ONE_NIGHT)
 
     def composition_label(self) -> str:
         if self.preview_mode() == Mode.NOTE:
-            return "人狼2・市民(人数-2)・占い師1・怪盗1(人数+2枚のうち2枚は墓地)"
+            return "人狼・占い師1・怪盗1・市民など(人数に合わせた表で配ります。8人は狂人入り)"
         return composition_text(self.composition())
 
     def assign_note_roles(self) -> None:

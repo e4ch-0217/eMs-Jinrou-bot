@@ -9,11 +9,11 @@ def game(roles, grave=("市民", "市民")):
 
 
 def test_deck_sizes():
-    for n in range(3, 7):
+    for n in range(3, 9):
         deal, grave = N.make_deck(n, random.Random(n))
-        assert len(deal) == n and len(grave) == 2
-        assert sum(N.card_counts(n).values()) == n + 2
-        assert deal.count(N.WOLF) + grave.count(N.WOLF) == 2
+        assert len(deal) == n
+        assert len(deal) + len(grave) == sum(N.card_counts(n).values())
+        assert deal.count(N.WOLF) + grave.count(N.WOLF) == N.card_counts(n)[N.WOLF]
 
 
 def test_seer_and_partner():
@@ -58,18 +58,37 @@ def test_vote_tie_with_wolf_village_wins():
     assert sorted(executed) == [1, 4] and winner == "village"
 
 
-def test_peace_village_all_win():
+def test_scattered_no_wolves_all_win():
+    # 全員バラバラで、プレイヤーに人狼がいない -> 全員の勝ち(平和村)
     g = game({1: N.VILLAGER, 2: N.SEER, 3: N.VILLAGER}, grave=(N.WOLF, N.WOLF))
-    votes = {1: N.PEACE, 2: N.PEACE, 3: 1}
-    assert N.resolve_vote(g, votes) == ("all", [])
+    assert N.resolve_vote(g, {1: 2, 2: 3, 3: 1}) == ("all", [])
 
 
-def test_peace_not_top_is_void():
+def test_scattered_with_wolf_wolf_wins():
+    g = game({1: N.WOLF, 2: N.SEER, 3: N.VILLAGER})
+    assert N.resolve_vote(g, {1: 2, 2: 3, 3: 1}) == ("wolf", [])
+
+
+def test_no_wolves_execution_wolf_wins():
+    # 人狼がプレイヤーにいないとき、人間を処刑したら人狼の勝ち
     g = game({1: N.VILLAGER, 2: N.SEER, 3: N.VILLAGER}, grave=(N.WOLF, N.WOLF))
-    votes = {1: N.PEACE, 2: 3, 3: 3}   # 平和村1票、3が2票 -> 無効
-    assert N.resolve_vote(g, votes) == ("void", [])
-    votes = {1: N.PEACE, 2: N.PEACE, 3: 1}
-    assert N.resolve_vote(g, votes)[0] == "all"
+    assert N.resolve_vote(g, {1: 3, 2: 3, 3: 1}) == ("wolf", [3])
+
+
+def test_madman_executed_alone_wolf_wins():
+    # 狂人は人狼陣営。狂人だけ処刑されたら、人狼陣営(wolf)の勝ち
+    g = game({1: N.WOLF, 2: N.MADMAN, 3: N.VILLAGER, 4: N.SEER})
+    assert N.resolve_vote(g, {1: 2, 2: 2, 3: 2, 4: 1}) == ("wolf", [2])
+
+
+def test_madman_is_wolf_team():
+    assert N.team_of(N.MADMAN) == "wolf"
+
+
+def test_eight_players_composition():
+    assert N.card_counts(8) == {N.WOLF: 3, N.SEER: 1, N.THIEF: 1, N.MADMAN: 1, N.VILLAGER: 4}
+    deal, grave = N.make_deck(8, random.Random(1))
+    assert len(deal) == 8 and len(grave) == 2
 
 
 def test_settle_inputs():

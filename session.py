@@ -12,7 +12,6 @@ import discord
 import config as C
 import points
 from game import MIN_PLAYERS, RESULT_LABEL, Game, Mode, Phase
-from note_rules import PEACE as PEACE_ID
 from handlers import Handlers
 import note_rules as NR
 from roles import ROLES, SURVEY_ROLES
@@ -276,7 +275,10 @@ class Session(Handlers):
         except discord.HTTPException:
             await self.channel.send("⚠️ チャンネルを作れませんでした。天国と人狼の部屋なしで進めます。")
         if self.heaven:
-            await self.to_heaven("👀 **天国へようこそ。** 全員の役職です。\n" + g.role_summary())
+            if g.mode == Mode.NOTE:   # ワンナイト人狼: 役職は、処刑されたときとゲーム終了時だけ公開する
+                await self.to_heaven("👀 **天国へようこそ。** 役職は、処刑されたときとゲーム終了時に公開されます。")
+            else:
+                await self.to_heaven("👀 **天国へようこそ。** 全員の役職です。\n" + g.role_summary())
             with contextlib.suppress(discord.HTTPException):   # 天国ができてから、観戦ボタンを出す
                 self.spectate_msg = await self.origin.send(
                     "👀 天国ができました。観戦する人は、下のボタンを押してください。",
@@ -330,10 +332,7 @@ class Session(Handlers):
                     if winner:
                         break
                     g.day += 1
-            if winner == "void":
-                await self.note_void()
-            else:
-                await self.finish(winner)
+            await self.finish(winner)
         except asyncio.CancelledError:
             if self.ending_early:
                 raise
@@ -727,12 +726,12 @@ class Session(Handlers):
     # ワンナイト人狼(noteのルール)
     # ================================================================
     def note_seer(self, uid: int, target: int) -> str:
-        """占い師の行動。target が 0 以上なら参加者、-1 / -2 なら墓地の1枚目 / 2枚目。結果の文を返す。"""
+        """占い師の行動。target が 0 以上なら参加者1人、-1 なら墓地の2枚。結果の文を返す。"""
         g, note = self.game, self.game.note
         self.note_choices[uid] = target
         if target < 0:
-            role = note.look_grave(-target - 1)
-            text = f"🔮 墓地の{-target}枚目は **{role}** でした。"
+            a, b = note.look_graveyard()
+            text = f"🔮 墓地の2枚は **{a}** と **{b}** でした。"
         else:
             role = note.look_player(target)
             text = f"🔮 **{g.players[target].name}** は **{role}** でした。"
@@ -785,17 +784,15 @@ class Session(Handlers):
         await asyncio.sleep(C.RESULT_DELAY)
 
     async def note_vote(self) -> str:
-        """投票(1人1票)。戻り値は勝った陣営("village" / "wolf" / "all" / "void")。"""
+        """投票(1人1票)。戻り値は勝った陣営("village" / "wolf" / "all")。"""
         g, note = self.game, self.game.note
         g.phase = Phase.VOTE
         self.note_votes = {}
         self.note_vote_done = asyncio.Event()
         await self.apply_voice("silent")
-        peace = not note.wolves()
         msg = await self.channel.send(embed=discord.Embed(
             title=f"🗳️ 投票({C.NOTE_VOTE_SECONDS}秒)",
-            description=("1人1票で、追放したい人に投票してください。"
-                         + ("\n墓地は2枚とも人狼です。プレイヤーに人狼はいません。「平和村を願う」に投票できます。" if peace else "")),
+            description="1人1票で、追放したい人に投票してください。",
             color=discord.Color.red()), view=NoteVoteView(self))
         await wait_event(self.note_vote_done, C.NOTE_VOTE_SECONDS)
         with contextlib.suppress(discord.HTTPException):
@@ -803,12 +800,7 @@ class Session(Handlers):
 
         winner, executed = NR.resolve_vote(note, self.note_votes)
         counts = Counter(self.note_votes.values())
-        names = {PEACE_ID: "平和村を願う"}
-        lines = [f"・{names.get(t, g.players[t].name if t in g.players else '?')}: {c}票"
-                 for t, c in counts.most_common()] or ["(投票なし)"]
-        if winner == "void":
-            await self.channel.send("📊 投票結果\n" + "\n".join(lines) + "\n\n平和村は一番になりませんでした。このゲームは無効です(参加費は返します)。")
-            return "void"
+        lines = [f"・{g.players[t].name}: {c}票" for t, c in counts.most_common()] or ["(投票なし)"]
         if executed:
             names_exec = "、".join(g.players[e].name for e in executed)
             roles_exec = "、".join(note.roles[e] for e in executed)
@@ -819,13 +811,6 @@ class Session(Handlers):
         else:
             await self.channel.send("📊 投票結果\n" + "\n".join(lines) + "\n\n票がバラバラのため、処刑はありません。")
         return winner
-
-    async def note_void(self) -> None:
-        """平和村が一番にならなかったゲーム。参加費を返して終わる。"""
-        self.refund()
-        self.game.phase = Phase.ENDED
-        self.finished = True
-        await self.channel.send("🔁 このゲームは無効になりました。参加費を返しました。")
 
     # ================================================================
     # 終了・中止
