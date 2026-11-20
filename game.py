@@ -274,7 +274,7 @@ class Game:
             for p in self.alive_players():
                 if p.role == "人狼":
                     p.kills += 1
-        elif res.attack_target is not None and res.attack_target == res.guard_target and self.guard_actor:
+        elif res.attack_target is not None and res.attack_target == res.guard_target and self.guard_actor is not None:
             self.players[self.guard_actor].gj += 1
         for p in self.alive_players():
             if p.user_id != res.victim:

@@ -205,6 +205,51 @@ async def pt_command(interaction: discord.Interaction):
     await interaction.response.send_message(f"💰 残高: **{bal}pt**", ephemeral=True)
 
 
+season = app_commands.Group(name="season", description="シーズン(ポイントのリセット)", guild_only=True)
+
+
+class SeasonConfirmView(discord.ui.View):
+    """記録を残さないリセットの、最後の確認。"""
+
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+
+    @discord.ui.button(label="はい、記録を残さずにリセット", style=discord.ButtonStyle.danger)
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        n = client.store.reset_season(self.guild_id, record=False)
+        await interaction.response.edit_message(
+            content=f"✅ リセットしました(記録は残していません)。対象: {n}人 → 2000pt", view=None)
+
+    @discord.ui.button(label="やめる", style=discord.ButtonStyle.secondary)
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="リセットをやめました。", view=None)
+
+
+@season.command(name="reset", description="全員のポイントを2000ptに戻します(サーバー管理者のみ)")
+@app_commands.describe(record="リセット前のランキングを残すか")
+@app_commands.choices(record=[
+    app_commands.Choice(name="記録を残す", value="yes"),
+    app_commands.Choice(name="記録を残さない(テスト用)", value="no"),
+])
+async def season_reset(interaction: discord.Interaction, record: app_commands.Choice[str]):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message("サーバー管理者だけが実行できます。", ephemeral=True)
+        return
+    if client.games.get(interaction.guild_id):
+        await interaction.response.send_message(
+            "ゲームの準備中・進行中は、リセットできません。終わってから実行してください。", ephemeral=True)
+        return
+    if record.value == "no":
+        await interaction.response.send_message(
+            "⚠️ **記録を残さずに**リセットします。今のランキングは消えて、元に戻せません。本当によいですか?",
+            view=SeasonConfirmView(interaction.guild_id), ephemeral=True)
+        return
+    n = client.store.reset_season(interaction.guild_id, record=True)
+    await interaction.response.send_message(f"✅ リセットしました(記録を残しました)。対象: {n}人 → 2000pt")
+
+
+client.tree.add_command(season)
 client.tree.add_command(jinro)
 
 

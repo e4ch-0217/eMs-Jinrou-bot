@@ -51,6 +51,7 @@ class Session(Handlers):
         self.wolf_channel: discord.TextChannel | None = None
         self.task: asyncio.Task | None = None
         self.started = self.finished = self.cleaned = False
+        self.ending_early = False                   # 即終了・人狼全滅での終了中(中止の表示を出さない)
 
         self.voice_mode: tuple[str, int | None] = ("day", None)   # 今のミュート状態
         self.note_choices: dict[int, int | None] = {}              # ワンナイト人狼の夜の選択
@@ -316,6 +317,8 @@ class Session(Handlers):
             else:
                 await self.finish(winner)
         except asyncio.CancelledError:
+            if self.ending_early:
+                raise
             with contextlib.suppress(discord.HTTPException):
                 await self.channel.send("🛑 ゲームを中止しました。参加費は返金されます。")
             self.refund()
@@ -608,6 +611,45 @@ class Session(Handlers):
         self.game.mark_quit(uid)
         await self.channel.send(f"🔌 **{p.name}** さんがVCに戻らなかったため、凸死になりました。")
         await self.to_heaven(f"🔌 {p.name} が凸死しました。")
+        await self.check_outcome()
+
+    async def check_outcome(self) -> None:
+        """抜けた・凸死したあとに呼ぶ。人狼が全員いなくなったら村人の勝ち。生きている人が3人未満なら即終了。"""
+        if not self.started or self.finished:
+            return
+        g = self.game
+        gone_wolves = [p for p in g.players.values() if p.role == "人狼" and (p.left or p.quit_early)]
+        alive_wolves = [p for p in g.alive_players() if p.role == "人狼"]
+        if gone_wolves and not alive_wolves:
+            await self.end_early("village")
+        elif len(g.alive_players()) < 3:
+            await self.end_unplayable()
+
+    async def stop_task_for_end(self) -> None:
+        self.ending_early = True
+        if self.task and not self.task.done() and asyncio.current_task() is not self.task:
+            self.task.cancel()
+
+    async def end_early(self, winner: str) -> None:
+        """人狼が全員いなくなった。通常どおり精算して終わる。"""
+        self.finished = True
+        await self.stop_task_for_end()
+        await self.finish(winner)
+
+    async def end_unplayable(self) -> None:
+        """生きている人が3人未満になった。最後まで残った人だけ参戦費を返す。報酬はなし。"""
+        g = self.game
+        self.finished = True
+        g.phase = Phase.ENDED
+        fee = points.fee_for(g.one_night)
+        for uid in self.payers:
+            p = g.players[uid]
+            if not (p.left or p.quit_early):
+                self.store.add(self.guild.id, uid, fee)
+        await self.stop_task_for_end()
+        with contextlib.suppress(discord.HTTPException):
+            await self.channel.send("⚠️ 参加者が足りなくなったため、ゲームを終了します。"
+                                    "最後まで残った人には参戦費を返しました(報酬はありません)。")
 
     async def leave_game(self, uid: int) -> None:
         """自分から途中で抜ける(退出)。報酬なし・参戦費は返さない。"""
@@ -622,6 +664,7 @@ class Session(Handlers):
         await self.to_heaven(f"🚪 {p.name} が退出しました。")
         if self.game.phase == Phase.NIGHT and not self.pending_night:
             self.night_event.set()
+        await self.check_outcome()
 
     # ================================================================
     # ワンナイト人狼(noteのルール)
