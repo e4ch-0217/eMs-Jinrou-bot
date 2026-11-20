@@ -48,7 +48,9 @@ class RoleSelectView(discord.ui.View):
         self.session, self.uid = session, uid
         self.first: str | None = None
         self.second: str | None = None
-        options = [discord.SelectOption(label=r.name, value=r.name) for r in ROLE_LIST]
+        # このゲームの役職構成にいる役職だけ出す(いない役職は選べない)
+        in_game = session.game.composition()
+        options = [discord.SelectOption(label=r.name, value=r.name) for r in ROLE_LIST if in_game.get(r.name)]
         options.append(discord.SelectOption(label="どれでもOK", value="any"))
         self.first_select = discord.ui.Select(placeholder="第1希望", options=options)
         self.second_select = discord.ui.Select(placeholder="第2希望", options=options)
@@ -136,6 +138,42 @@ class ConfirmLeaveView(discord.ui.View):
     @discord.ui.button(label="やめる", style=discord.ButtonStyle.secondary)
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="続けます。", view=None)
+
+
+class CloseNowView(discord.ui.View):
+    """終了後、主催者が天国・進行・人狼の巣をすぐ閉じるボタン。"""
+
+    def __init__(self, session):
+        super().__init__(timeout=None)
+        self.session = session
+
+    @discord.ui.button(label="今すぐ閉じる", style=discord.ButtonStyle.secondary, emoji="🧹")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.session.game.host_id:
+            await interaction.response.send_message("主催者だけが押せます。", ephemeral=True)
+            return
+        self.session.close_now.set()
+        await interaction.response.send_message("チャンネルを閉じます。", ephemeral=True)
+
+
+class ConfirmCOView(discord.ui.View):
+    """人狼陣営の役職にCOするときの、最後の確認。"""
+
+    def __init__(self, handlers, uid: int, role: str):
+        super().__init__(timeout=60)
+        self.handlers, self.uid, self.role = handlers, uid, role
+
+    @discord.ui.button(label="はい、COする", style=discord.ButtonStyle.danger)
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.uid:
+            await interaction.response.send_message("この確認は、COした本人だけが押せます。", ephemeral=True)
+            return
+        if await self.handlers.commit_co(interaction, self.role):
+            await interaction.response.edit_message(content="記録しました。", view=None)
+
+    @discord.ui.button(label="やめる", style=discord.ButtonStyle.secondary)
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="COをやめました。", view=None)
 
 
 class NoteVoteView(discord.ui.View):

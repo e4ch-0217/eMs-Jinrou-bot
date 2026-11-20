@@ -55,6 +55,34 @@ class JinroBot(discord.Client):
 client = JinroBot()
 
 
+class KickSelect(discord.ui.Select):
+    """募集中に、主催者が参加者を外すための選択肢。"""
+
+    def __init__(self, session: Session):
+        options = [discord.SelectOption(label=p.name, value=str(uid))
+                   for uid, p in session.game.players.items() if uid != session.game.host_id][:25]
+        super().__init__(placeholder="外す人を選んでください", options=options, min_values=1, max_values=1)
+        self.session = session
+
+    async def callback(self, interaction: discord.Interaction):
+        s = self.session
+        if s.started or interaction.user.id != s.game.host_id:
+            await interaction.response.edit_message(content="今はキックできません。", view=None)
+            return
+        uid = int(self.values[0])
+        p = s.game.players.get(uid)
+        if p is None:
+            await interaction.response.edit_message(content="その人は、もういません。", view=None)
+            return
+        s.game.remove_player(uid)
+        await interaction.response.edit_message(content=f"**{p.name}** さんを外しました。", view=None)
+        if s.lobby_message:
+            with contextlib.suppress(discord.HTTPException):
+                await s.lobby_message.edit(embed=s.lobby_embed())
+        with contextlib.suppress(discord.HTTPException):
+            await s.channel.send(f"🥾 **{p.name}** さんを募集から外しました。")
+
+
 class LobbyView(discord.ui.View):
     def __init__(self, session: Session):
         super().__init__(timeout=None)
@@ -81,6 +109,20 @@ class LobbyView(discord.ui.View):
         else:
             s.game.remove_player(interaction.user.id)
             await interaction.response.edit_message(embed=s.lobby_embed(), view=self)
+
+    @discord.ui.button(label="キック", style=discord.ButtonStyle.danger, emoji="🥾")
+    async def kick(self, interaction: discord.Interaction, button: discord.ui.Button):
+        s = self.session
+        if interaction.user.id != s.game.host_id:
+            await interaction.response.send_message("キックできるのは主催者だけです。", ephemeral=True)
+        elif s.started:
+            await interaction.response.send_message("すでに開始しています。", ephemeral=True)
+        elif len(s.game.players) <= 1:
+            await interaction.response.send_message("外せる人がいません。", ephemeral=True)
+        else:
+            view = discord.ui.View(timeout=60)
+            view.add_item(KickSelect(s))
+            await interaction.response.send_message("外す人を選んでください(募集から外れます)。", view=view, ephemeral=True)
 
     @discord.ui.button(label="ゲーム開始", style=discord.ButtonStyle.primary, emoji="🎮")
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):

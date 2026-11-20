@@ -20,4 +20,4 @@ TIE_SPEECH_SECONDS = 20      # 決選投票に残った人の主張
 TIE_VOTE_SECONDS = 30        # 決選投票の時間
 
 QUIT_GRACE_SECONDS = 180     # VCから抜けたまま戻らなければ凸死(3分)
-CLEANUP_SECONDS = 60         # 終了後、天国などを削除するまで
+CLEANUP_SECONDS = 180        # 終了後、天国などを削除するまで

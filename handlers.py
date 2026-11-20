@@ -6,8 +6,8 @@ import contextlib
 import discord
 
 from game import RESULT_LABEL, Mode, Phase
-from roles import ROLES, SURVEY_ROLES
-from views import ConfirmLeaveView, NoteModal, PickView, ResultView
+from roles import ROLES, SURVEY_ROLES, WOLF_SIDE_CO
+from views import ConfirmCOView, ConfirmLeaveView, NoteModal, PickView, ResultView
 
 
 async def deny(interaction: discord.Interaction, text: str) -> None:
@@ -22,6 +22,8 @@ class Handlers:
         role = ROLES[p.role]
         text = f"{role.emoji} あなたの役職は **{role.name}** です({g.mode.value})。\n\n{role.description}"
         if p.role == "人狼":
+            if sum(1 for w in g.players.values() if w.role == "人狼") >= 2:
+                text += "\n夜の間だけ人狼の巣で作戦会議ができます。"
             mates = [w.name for w in g.players.values() if w.role == "人狼" and w.user_id != uid]
             text += "\n\n仲間の人狼: " + ("、".join(mates) if mates else "いません(あなた1人です)")
         if uid in self.first_night_info:
@@ -300,11 +302,28 @@ class Handlers:
         if role != "撤回" and role not in {q.role for q in g.players.values()}:
             await deny(interaction, "その役職は、このゲームにいません。")
             return
+        if role in WOLF_SIDE_CO:
+            text = "⚠️ あなたは人狼陣営として、カミングアウトしようとしています。本当によろしいですか?"
+            if ROLES[p.role].team == "village":
+                text += "\n🚨 あなたは村人陣営です。人狼陣営の役職をCOすると、**偽CO**になります。"
+            await interaction.response.send_message(
+                text, view=ConfirmCOView(self, p.user_id, role), ephemeral=True)
+            return
+        if await self.commit_co(interaction, role):
+            await deny(interaction, "記録しました。")
+
+    async def commit_co(self, interaction: discord.Interaction, role: str) -> bool:
+        """COを記録して、全員に知らせる。失敗したときは、ここで返事をして False を返す。"""
+        g = self.game
+        p = g.players.get(interaction.user.id)
+        if p is None or not p.alive or g.phase not in (Phase.DAY, Phase.VOTE):
+            await deny(interaction, "今はCOできません。")
+            return False
         text = g.set_co(p.user_id, role)
         # COは全員に見せる(通知は通常のメッセージで、CO一覧も更新する)
         await self.channel.send(text)
-        await deny(interaction, "記録しました。")
         await self.refresh_co_panel()
+        return True
 
     async def open_report_menu(self, interaction: discord.Interaction) -> None:
         g = self.game

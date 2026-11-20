@@ -17,7 +17,7 @@ from handlers import Handlers
 import note_rules as NR
 from roles import ROLES, SURVEY_ROLES
 from collections import Counter
-from views import (COView, ConfirmVoteView, DayView, GameView, HopeView, JumpView, NightView,
+from views import (COView, CloseNowView, ConfirmVoteView, DayView, GameView, HopeView, JumpView, NightView,
                    NoteVoteView, SpeakEndView, TieVoteView)
 
 log = logging.getLogger("jinro")
@@ -51,6 +51,7 @@ class Session(Handlers):
         self.wolf_channel: discord.TextChannel | None = None
         self.task: asyncio.Task | None = None
         self.started = self.finished = self.cleaned = False
+        self.close_now = asyncio.Event()           # 主催者が「今すぐ閉じる」を押した
         self.ending_early = False                   # 即終了・人狼全滅での終了中(中止の表示を出さない)
 
         self.voice_mode: tuple[str, int | None] = ("day", None)   # 今のミュート状態
@@ -112,13 +113,12 @@ class Session(Handlers):
                                for p in self.game.players.values() if not p.quit_early))
 
     async def speak(self, uid: int, seconds: int, after: str = "day",
-                    prompt: str = "遺言があればどうぞ") -> None:
+                    prompt: str = "遺言があればどうぞ", text: str | None = None) -> None:
         """uid だけが話せる時間。「意見終了」か制限時間で終わる。終わったあとは after のモードに戻す。"""
         self.speak_end.clear()
         await self.apply_voice("speaker", uid)
-        await self.channel.send(
-            f"🎤 <@{uid}> さん、{prompt}(最大{seconds}秒)。終わったら「意見終了」を押してください。",
-            view=SpeakEndView(self, uid))
+        message = text or f"🎤 <@{uid}> さん、{prompt}(最大{seconds}秒)。終わったら「意見終了」を押してください。"
+        await self.channel.send(message, view=SpeakEndView(self, uid))
         await wait_event(self.speak_end, seconds)
         await self.apply_voice(after)
 
@@ -243,7 +243,8 @@ class Session(Handlers):
                 "人狼-進行", category=origin.category, overwrites=overwrites,
                 topic="ゲームの進行(自動で流れます)")
             self.channel = self.game_channel
-            await origin.send(f"🐺 ゲームの進行は {self.game_channel.mention} で行います。そちらを見てください。")
+            mentions = " ".join(f"<@{uid}>" for uid in self.game.players)
+            await origin.send(f"{mentions}\n🐺 ゲームの進行は {self.game_channel.mention} で行います。そちらを見てください。")
         except discord.HTTPException:
             self.channel = origin
             await origin.send("⚠️ 進行用のチャンネルを作れませんでした。このチャンネルで進めます。")
@@ -475,7 +476,7 @@ class Session(Handlers):
         g.phase = Phase.DAY
         self.skip_votes, self.ext_votes = set(), set()
         self.skip_event.clear()
-        self.ext_used, self.ext_pending = 0, False
+        self.ext_pending = False                    # 延長は1試合で2回まで(ext_used は引き継ぐ)
         await self.set_wolf_chat(False)
         await self.apply_voice("day")
 
@@ -485,6 +486,7 @@ class Session(Handlers):
             title=f"☀️ {g.day}日目の昼",
             description=(f"**生存者({len(g.alive_players())}人)**: {alive}\n"
                          f"議論: {secs // 60}分{secs % 60:02d}秒 / 延長は1分を{C.EXTEND_MAX}回まで(過半数で)\n"
+                         f"延長はあと{C.EXTEND_MAX - self.ext_used}回\n"
                          "「投票へ進む」は、過半数でいつでも押せます。"),
             color=discord.Color.gold()), view=DayView(self))
         await self.new_co_panel()
@@ -559,8 +561,9 @@ class Session(Handlers):
             title="🗳️ 決選投票", description="同票です: " + "、".join(g.players[c].name for c in leaders)
             + "\n候補の人は、順に短く主張してください。", color=discord.Color.red()))
         for c in leaders:
-            await self.speak(c, C.TIE_SPEECH_SECONDS, after="silent",
-                             prompt="決選に残った理由を、短く話してください")
+            await self.speak(c, C.TIE_SPEECH_SECONDS, after="silent", text=(
+                f"<@{c}> さん、あなたは決選投票に残りました。処刑されないように弁明する時間があります。"
+                f"(最大{C.TIE_SPEECH_SECONDS}秒)終わったら「意見終了」を押してください。"))
         self.votes, self.tie_candidates = {}, leaders
         await self.apply_voice("silent")
         await self.channel.send(embed=discord.Embed(
@@ -649,7 +652,8 @@ class Session(Handlers):
         await self.stop_task_for_end()
         with contextlib.suppress(discord.HTTPException):
             await self.channel.send("⚠️ 参加者が足りなくなったため、ゲームを終了します。"
-                                    "最後まで残った人には参戦費を返しました(報酬はありません)。")
+                                    "最後まで残った人には参戦費を返しました(報酬はありません)。",
+                                    view=CloseNowView(self))
 
     async def leave_game(self, uid: int) -> None:
         """自分から途中で抜ける(退出)。報酬なし・参戦費は返さない。"""
@@ -789,7 +793,7 @@ class Session(Handlers):
         embed.add_field(name=f"💰 ポイント(還元率 {round(s.ratio * 100)}%)",
                         value="\n".join(lines)[:1000], inline=False)
         embed.add_field(name="📋 COの記録", value=g.history_text()[:1000], inline=False)
-        await self.channel.send(embed=embed)
+        await self.channel.send(embed=embed, view=CloseNowView(self))
 
     def refund(self) -> None:
         if self.started and not self.finished:
@@ -820,7 +824,8 @@ class Session(Handlers):
             with contextlib.suppress(discord.HTTPException):
                 await c.send(f"このチャンネルは{C.CLEANUP_SECONDS}秒後に削除されます。")
         if channels:
-            await asyncio.sleep(C.CLEANUP_SECONDS)
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.close_now.wait(), C.CLEANUP_SECONDS)
         for c in channels:
             with contextlib.suppress(discord.HTTPException):
                 await c.delete()
