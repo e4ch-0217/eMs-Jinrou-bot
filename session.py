@@ -36,6 +36,8 @@ class Session(Handlers):
     def __init__(self, bot, guild: discord.Guild, channel: discord.TextChannel,
                  vc: discord.VoiceChannel, game: Game, store, host_name: str):
         self.bot, self.guild, self.channel, self.vc = bot, guild, channel, vc
+        self.origin = channel                      # 募集をしたチャンネル(ロビーはここ)
+        self.game_channel: discord.TextChannel | None = None   # 進行専用のチャンネル
         self.game, self.store, self.host_name = game, store, host_name
 
         self.payers: set[int] = set()
@@ -90,7 +92,7 @@ class Session(Handlers):
     def _should_mute(self, uid: int) -> bool:
         mode, speaker = self.voice_mode
         p = self.game.players[uid]
-        if mode == "night":
+        if mode in ("night", "silent"):
             return True
         if mode == "speaker":
             return uid != speaker
@@ -102,15 +104,15 @@ class Session(Handlers):
         await asyncio.gather(*(self.set_mute(p.user_id, self._should_mute(p.user_id))
                                for p in self.game.players.values() if not p.quit_early))
 
-    async def speak(self, uid: int, seconds: int) -> None:
-        """uid だけが話せる時間。「意見終了」か制限時間で終わる。"""
+    async def speak(self, uid: int, seconds: int, after: str = "day") -> None:
+        """uid だけが話せる時間。「意見終了」か制限時間で終わる。終わったあとは after のモードに戻す。"""
         self.speak_end.clear()
         await self.apply_voice("speaker", uid)
         await self.channel.send(
             f"🎤 <@{uid}> さん、話してください(最大{seconds}秒)。終わったら「意見終了」を押してください。",
             view=SpeakEndView(self, uid))
         await wait_event(self.speak_end, seconds)
-        await self.apply_voice("day")
+        await self.apply_voice(after)
 
     async def lock_vc(self) -> None:
         """VCは参加者以外は話せない。"""
@@ -221,6 +223,22 @@ class Session(Handlers):
         self.game.assign_roles(self.hopes)
         await self.channel.send("🎲 役職を配りました。「役職を確認」から、自分の役職を見てください。")
 
+    async def setup_game_channel(self) -> None:
+        """進行(アナウンス・投票・COなど)を流す専用チャンネル。終わったら、天国と一緒に消す。"""
+        origin = self.origin
+        overwrites = dict(origin.overwrites)
+        overwrites[self.guild.default_role] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=False)     # 見るのは全員、書くのはボットだけ
+        overwrites[self.guild.me] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+        try:
+            self.game_channel = await self.guild.create_text_channel(
+                "人狼-進行", category=origin.category, overwrites=overwrites,
+                topic="ゲームの進行(自動で流れます)")
+            self.channel = self.game_channel
+        except discord.HTTPException:
+            self.channel = origin
+            await origin.send("⚠️ 進行用のチャンネルを作れませんでした。このチャンネルで進めます。")
+
     async def setup_channels(self) -> None:
         g = self.game
         hidden = {
@@ -252,6 +270,7 @@ class Session(Handlers):
     async def run(self) -> None:
         g = self.game
         try:
+            await self.setup_game_channel()
             await self.hope_phase()
             await self.setup_channels()
             await self.lock_vc()
@@ -465,6 +484,7 @@ class Session(Handlers):
         g = self.game
         g.phase = Phase.VOTE
         self.votes, self.jump_queue = {}, []
+        await self.apply_voice("silent")                   # 投票の間は、順番の人以外は話せない
         seats = " → ".join(g.players[u].name for u in g.seats if g.players[u].alive)
         jump_msg = await self.channel.send(embed=discord.Embed(
             title="🗳️ 投票が始まります",
@@ -505,7 +525,7 @@ class Session(Handlers):
         if voter not in self.votes:
             await self.channel.send(f"⏱️ **{g.players[voter].name}** さんは時間内に確定しませんでした(棄権)。")
             return
-        await self.speak(voter, C.VOTE_SPEECH_SECONDS)
+        await self.speak(voter, C.VOTE_SPEECH_SECONDS, after="silent")
         await self.channel.send(
             f"📣 **{g.players[voter].name}** → **{g.players[self.votes[voter]].name}**")
 
@@ -516,8 +536,9 @@ class Session(Handlers):
             title="🗳️ 決選投票", description="同票です: " + "、".join(g.players[c].name for c in leaders)
             + "\n候補の人は、順に短く主張してください。", color=discord.Color.red()))
         for c in leaders:
-            await self.speak(c, C.TIE_SPEECH_SECONDS)
+            await self.speak(c, C.TIE_SPEECH_SECONDS, after="silent")
         self.votes, self.tie_candidates = {}, leaders
+        await self.apply_voice("silent")
         await self.channel.send(embed=discord.Embed(
             title="🗳️ 決選の投票(候補の人は投票できません)",
             description=f"「決選に投票」を押してください({C.TIE_VOTE_SECONDS}秒)。", color=discord.Color.red()),
@@ -625,7 +646,7 @@ class Session(Handlers):
             if m:
                 with contextlib.suppress(discord.HTTPException):
                     await self.channel.set_permissions(m, overwrite=None)
-        channels = [c for c in (self.wolf_channel, self.heaven) if c]
+        channels = [c for c in (self.game_channel, self.wolf_channel, self.heaven) if c]
         for c in channels:
             with contextlib.suppress(discord.HTTPException):
                 await c.send(f"このチャンネルは{C.CLEANUP_SECONDS}秒後に削除されます。")
