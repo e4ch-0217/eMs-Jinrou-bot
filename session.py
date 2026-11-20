@@ -118,11 +118,12 @@ class Session(Handlers):
                     prompt: str = "遺言があればどうぞ", text: str | None = None) -> None:
         """uid だけが話せる時間。「意見終了」か制限時間で終わる。終わったあとは after のモードに戻す。"""
         self.speak_end.clear()
-        await self.apply_voice("speaker", uid)
         message = text or f"🎤 <@{uid}> さん、{prompt}(最大{seconds}秒)。終わったら「意見終了」を押してください。"
-        await self.channel.send(message, view=SpeakEndView(self, uid))
+        await self.channel.send(message, view=SpeakEndView(self, uid))   # 案内を先に出す(ミュートの切り替えを待たせない)
+        await self.apply_voice("speaker", uid)
         await wait_event(self.speak_end, seconds)
-        await self.apply_voice(after)
+        if after is not None:
+            await self.apply_voice(after)
 
     async def lock_vc(self) -> None:
         """VCは参加者以外は話せない。"""
@@ -374,7 +375,7 @@ class Session(Handlers):
         await self.apply_voice("night")
         await self.set_wolf_chat(True)
         await self.channel.send(embed=discord.Embed(
-            title="🌙 初日の夜",
+            title="🌙 恐ろしい夜がやってきました(初日)",
             description="襲撃はありません。占い師には、ランダムな「人間」が1人伝えられます。",
             color=discord.Color.dark_blue()))
         await asyncio.sleep(C.FIRST_NIGHT_SECONDS)
@@ -390,7 +391,7 @@ class Session(Handlers):
         await self.apply_voice("night")
         await self.set_wolf_chat(True)
         msg = await self.channel.send(embed=discord.Embed(
-            title=f"🌙 {g.day}日目の夜({C.NIGHT_SECONDS}秒)",
+            title=f"🌙 恐ろしい夜がやってきました({g.day}日目・{C.NIGHT_SECONDS}秒)",
             description=("行動する人は「夜の行動」を押してください(市民・霊媒師・狂人は、怪しい人アンケートです)。\n"
                          "全員が確定すると、すぐに結果が出ます。人狼は「人狼の巣」で相談できます。"),
             color=discord.Color.dark_blue()), view=NightView(self))
@@ -582,10 +583,12 @@ class Session(Handlers):
         if voter not in self.votes:
             await self.channel.send(f"⏱️ **{g.players[voter].name}** さんは時間内に確定しませんでした(棄権)。")
             return
-        await self.speak(voter, C.VOTE_SPEECH_SECONDS, after="silent",
+        await self.speak(voter, C.VOTE_SPEECH_SECONDS, after=None,
                          prompt="なぜ投票したのか一言話してください")
-        await self.channel.send(
-            f"📣 **{g.players[voter].name}** → **{g.players[self.votes[voter]].name}**")
+        # ミュートに戻す処理と、結果の表示を同時にする(次の人の番を、早く出すため)
+        await asyncio.gather(
+            self.apply_voice("silent"),
+            self.channel.send(f"📣 **{g.players[voter].name}** → **{g.players[self.votes[voter]].name}**"))
 
     async def tie_break(self, leaders: list[int]) -> list[int]:
         """決選投票。候補者は主張し、投票はできない。"""
@@ -757,7 +760,7 @@ class Session(Handlers):
         await self.apply_voice("night")
         await self.set_wolf_chat(True)
         msg = await self.channel.send(embed=discord.Embed(
-            title=f"🌙 夜({C.NIGHT_SECONDS}秒)",
+            title=f"🌙 恐ろしい夜がやってきました({C.NIGHT_SECONDS}秒)",
             description=("占い師と怪盗は「夜の行動」を押してください。"
                          "人狼は、押すと仲間が分かります。村人は何もしません。"),
             color=discord.Color.dark_blue()), view=NightView(self))

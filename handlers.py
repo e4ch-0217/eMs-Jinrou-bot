@@ -214,9 +214,14 @@ class Handlers:
         if reason:
             await deny(interaction, reason)
             return
-        self.skip_votes.add(interaction.user.id)
+        uid = interaction.user.id
+        if uid in self.skip_votes:
+            await deny(interaction, "すでに希望しています。")
+            return
+        self.skip_votes.add(uid)
         need = self.majority()
-        await deny(interaction, f"投票へ進む希望: {len(self.skip_votes)}/{need}")
+        await self.channel.send(f"⏩ 投票へ進む希望: {len(self.skip_votes)}/{need}(<@{uid}> さん)")
+        await interaction.response.send_message("希望を受け付けました。", ephemeral=True)
         if len(self.skip_votes) >= need:
             self.skip_event.set()
 
@@ -229,9 +234,14 @@ class Handlers:
         if self.ext_used >= EXTEND_MAX:
             await deny(interaction, f"延長は1試合{EXTEND_MAX}回までです。")
             return
-        self.ext_votes.add(interaction.user.id)
+        uid = interaction.user.id
+        if uid in self.ext_votes:
+            await deny(interaction, "すでに希望しています。")
+            return
+        self.ext_votes.add(uid)
         need = self.majority()
-        await deny(interaction, f"延長の希望: {len(self.ext_votes)}/{need}")
+        await self.channel.send(f"⏳ 延長の希望: {len(self.ext_votes)}/{need}(<@{uid}> さん)")
+        await interaction.response.send_message("希望を受け付けました。", ephemeral=True)
         if len(self.ext_votes) >= need:
             self.ext_used += 1
             self.ext_votes = set()
