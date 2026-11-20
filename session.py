@@ -452,7 +452,7 @@ class Session(Handlers):
         g = self.game
         g.phase = Phase.DAY
         res = self.last_night
-        await self.apply_voice("day")
+        await self.apply_voice("silent")                  # 遺言の人以外は、昼の議論が始まるまで話せない
         victim = res.victim if (res and res.victim is not None) else None
         # 次の朝までVCに戻らなかった人(襲撃された人は除く)
         gone = [uid for uid in list(self.absent) if uid != victim
@@ -468,7 +468,7 @@ class Session(Handlers):
         await self.channel.send(embed=discord.Embed(
             title="☀️ おはようございます", description=desc, color=discord.Color.gold()))
         if victim is not None:
-            await self.speak(victim, C.VICTIM_WILL_SECONDS)
+            await self.speak(victim, C.VICTIM_WILL_SECONDS, after="silent")
             await self.kill(victim)
         else:
             await asyncio.sleep(C.MORNING_SECONDS)
@@ -527,11 +527,16 @@ class Session(Handlers):
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + secs
+        warned = secs <= 30                          # 残り30秒の告知は、1回だけ(延長したら、また出す)
         while loop.time() < deadline and not self.skip_event.is_set():
             if self.ext_pending:
                 self.ext_pending = False
                 deadline += C.EXTEND_SECONDS
+                warned = False
                 await self.channel.send(f"⏳ 延長しました(+{C.EXTEND_SECONDS // 60}分)。")
+            if not warned and deadline - loop.time() <= 30:
+                warned = True
+                await self.channel.send("⏰ 議論の終わりまで、あと30秒です。")
             await asyncio.sleep(1)
         await self.channel.send(embed=discord.Embed(
             title="⌛ 議論が終了しました", description="まもなく投票が始まります。", color=discord.Color.red()))
@@ -588,7 +593,8 @@ class Session(Handlers):
         # ミュートに戻す処理と、結果の表示を同時にする(次の人の番を、早く出すため)
         await asyncio.gather(
             self.apply_voice("silent"),
-            self.channel.send(f"📣 **{g.players[voter].name}** → **{g.players[self.votes[voter]].name}**"))
+            self.channel.send(f"📣 **{g.players[voter].name}** → **{g.players[self.votes[voter]].name}**"),
+            self.to_heaven(f"🗳️ {g.players[voter].name} → {g.players[self.votes[voter]].name}"))
 
     async def tie_break(self, leaders: list[int]) -> list[int]:
         """決選投票。候補者は主張し、投票はできない。"""
@@ -803,6 +809,8 @@ class Session(Handlers):
 
         winner, executed = NR.resolve_vote(note, self.note_votes)
         counts = Counter(self.note_votes.values())
+        for voter, target in self.note_votes.items():
+            await self.to_heaven(f"🗳️ {g.players[voter].name} → {g.players[target].name}")
         lines = [f"・{g.players[t].name}: {c}票" for t, c in counts.most_common()] or ["(投票なし)"]
         if executed:
             names_exec = "、".join(g.players[e].name for e in executed)
@@ -859,16 +867,16 @@ class Session(Handlers):
             if m:
                 with contextlib.suppress(discord.HTTPException):
                     await self.channel.set_permissions(m, overwrite=None)
-        if self.spectate_msg:
-            with contextlib.suppress(discord.HTTPException):
-                await self.spectate_msg.delete()
         channels = [c for c in (self.game_channel, self.wolf_channel, self.heaven) if c]
         for c in channels:
             with contextlib.suppress(discord.HTTPException):
                 await c.send(f"このチャンネルは{C.CLEANUP_SECONDS}秒後に削除されます。")
         if channels:
-            with contextlib.suppress(asyncio.TimeoutError):
+            with contextlib.suppress(asyncio.TimeoutError):   # この間は、生存者も天国を観戦できる
                 await asyncio.wait_for(self.close_now.wait(), C.CLEANUP_SECONDS)
+        if self.spectate_msg:                                  # 観戦ボタンは、天国を消すときに一緒に消す
+            with contextlib.suppress(discord.HTTPException):
+                await self.spectate_msg.delete()
         for c in channels:
             with contextlib.suppress(discord.HTTPException):
                 await c.delete()
