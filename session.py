@@ -540,7 +540,7 @@ class Session(Handlers):
     async def vote_turn(self, voter: int) -> None:
         g = self.game
         await self.channel.send(
-            f"🗳️ <@{voter}> さんの番です。{C.VOTE_CONFIRM_SECONDS}秒以内に投票先を確定してください。",
+            f"🗳️ <@{voter}> さんの番です。",
             view=ConfirmVoteView(self, voter, C.VOTE_CONFIRM_SECONDS + 5))
         for _ in range(C.VOTE_CONFIRM_SECONDS):
             if voter in self.votes:

@@ -5,6 +5,7 @@ import contextlib
 
 import discord
 
+import config as C
 from game import RESULT_LABEL, Mode, Phase
 from roles import ROLES, SURVEY_ROLES, WOLF_SIDE_CO
 from views import ConfirmCOView, ConfirmLeaveView, NoteModal, PickView, ResultView
@@ -267,6 +268,7 @@ class Handlers:
                 content=f"🗳️ **{g.players[target].name}** に確定しました。理由を話してください。", view=None)
 
         await interaction.response.send_message(
+            f"⏳ {C.VOTE_CONFIRM_SECONDS}秒以内に投票先を確定してください。\n"
             "投票先を選んでください(確定後は変えられません)。",
             view=PickView(candidates, on_pick, "処刑する人を選ぶ"), ephemeral=True)
 
