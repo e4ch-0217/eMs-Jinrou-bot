@@ -226,7 +226,7 @@ async def mode_command(interaction: discord.Interaction, choice: app_commands.Ch
         return
     if choice.value == "note":
         s.game.mode_override = Mode.NOTE
-        text = "モードを**ワンナイト人狼**にしました(noteのルールで遊びます)。"
+        text = "モードを**ワンナイト人狼**にしました(noteのルールで遊びます)。\nルール: https://note.com/1nwerewolf/n/n446a1fde2286"
     elif choice.value == "one_night":
         s.game.mode_override = Mode.ONE_NIGHT
         text = "モードを**簡略化人狼**にしました(人数に関係なく、簡略化人狼で遊びます)。"
