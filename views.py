@@ -138,6 +138,18 @@ class ConfirmLeaveView(discord.ui.View):
         await interaction.response.edit_message(content="続けます。", view=None)
 
 
+class NoteVoteView(discord.ui.View):
+    """ワンナイト人狼の投票ボタン。"""
+
+    def __init__(self, session):
+        super().__init__(timeout=None)
+        self.session = session
+
+    @discord.ui.button(label="投票する", style=discord.ButtonStyle.danger, emoji="🗳️")
+    async def vote(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.session.note_open_vote(interaction)
+
+
 class NightView(discord.ui.View):
     def __init__(self, session):
         super().__init__(timeout=NIGHT_SECONDS + 10)
@@ -168,7 +180,9 @@ class COView(discord.ui.View):
     def __init__(self, session):
         super().__init__(timeout=None)
         self.session = session
-        for role in CO_CHOICES + ["撤回"]:
+        in_game = {p.role for p in session.game.players.values()}
+        # ゲームにいる役職だけ、COの候補に出す(「撤回」は常に出す)
+        for role in [r for r in CO_CHOICES if r in in_game] + ["撤回"]:
             label = "撤回" if role == "撤回" else f"{role}CO"
             button = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
             button.callback = self._make(role)

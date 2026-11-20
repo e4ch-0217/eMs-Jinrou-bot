@@ -168,10 +168,11 @@ async def stop(interaction: discord.Interaction):
 
 
 @jinro.command(name="mode", description="モードを決めます(主催者のみ・開始前)")
-@app_commands.describe(choice="自動(人数で決める) / ワンナイト(何人でもワンナイトにする)")
+@app_commands.describe(choice="自動(人数で決める) / 簡略化人狼にする(何人でも簡略化人狼で遊ぶ)")
 @app_commands.choices(choice=[
     app_commands.Choice(name="自動(人数で決める)", value="auto"),
-    app_commands.Choice(name="ワンナイトにする", value="one_night"),
+    app_commands.Choice(name="簡略化人狼にする", value="one_night"),
+    app_commands.Choice(name="ワンナイト人狼にする", value="note"),
 ])
 async def mode_command(interaction: discord.Interaction, choice: app_commands.Choice[str]):
     s = client.games.get(interaction.guild_id)
@@ -181,9 +182,12 @@ async def mode_command(interaction: discord.Interaction, choice: app_commands.Ch
     if interaction.user.id != s.game.host_id:
         await interaction.response.send_message("主催者だけが変更できます。", ephemeral=True)
         return
-    if choice.value == "one_night":
+    if choice.value == "note":
+        s.game.mode_override = Mode.NOTE
+        text = "モードを**ワンナイト人狼**にしました(noteのルールで遊びます)。"
+    elif choice.value == "one_night":
         s.game.mode_override = Mode.ONE_NIGHT
-        text = "モードを**ワンナイト**にしました(人数に関係なく、ワンナイトで遊びます)。"
+        text = "モードを**簡略化人狼**にしました(人数に関係なく、簡略化人狼で遊びます)。"
     else:
         s.game.mode_override = None
         text = "モードを**自動**(人数で決める)に戻しました。"

@@ -12,10 +12,13 @@ import discord
 import config as C
 import points
 from game import MIN_PLAYERS, RESULT_LABEL, Game, Mode, Phase
+from note_rules import PEACE as PEACE_ID
 from handlers import Handlers
+import note_rules as NR
 from roles import ROLES, SURVEY_ROLES
+from collections import Counter
 from views import (COView, ConfirmVoteView, DayView, GameView, HopeView, JumpView, NightView,
-                   SpeakEndView, TieVoteView)
+                   NoteVoteView, SpeakEndView, TieVoteView)
 
 log = logging.getLogger("jinro")
 
@@ -50,6 +53,9 @@ class Session(Handlers):
         self.started = self.finished = self.cleaned = False
 
         self.voice_mode: tuple[str, int | None] = ("day", None)   # 今のミュート状態
+        self.note_choices: dict[int, int | None] = {}              # ワンナイト人狼の夜の選択
+        self.note_votes: dict[int, int] = {}
+        self.note_vote_done = asyncio.Event()
         self.quit_tasks: dict[int, asyncio.Task] = {}
 
         # 夜
@@ -104,12 +110,13 @@ class Session(Handlers):
         await asyncio.gather(*(self.set_mute(p.user_id, self._should_mute(p.user_id))
                                for p in self.game.players.values() if not p.quit_early))
 
-    async def speak(self, uid: int, seconds: int, after: str = "day") -> None:
+    async def speak(self, uid: int, seconds: int, after: str = "day",
+                    prompt: str = "遺言があればどうぞ") -> None:
         """uid だけが話せる時間。「意見終了」か制限時間で終わる。終わったあとは after のモードに戻す。"""
         self.speak_end.clear()
         await self.apply_voice("speaker", uid)
         await self.channel.send(
-            f"🎤 <@{uid}> さん、話してください(最大{seconds}秒)。終わったら「意見終了」を押してください。",
+            f"🎤 <@{uid}> さん、{prompt}(最大{seconds}秒)。終わったら「意見終了」を押してください。",
             view=SpeakEndView(self, uid))
         await wait_event(self.speak_end, seconds)
         await self.apply_voice(after)
@@ -164,7 +171,7 @@ class Session(Handlers):
     # ロビーと開始
     # ================================================================
     def fee_now(self) -> int:
-        return points.fee_for(self.game.preview_mode() == Mode.ONE_NIGHT)
+        return points.fee_for(self.game.preview_mode() in (Mode.ONE_NIGHT, Mode.NOTE))
 
     def lobby_embed(self) -> discord.Embed:
         g = self.game
@@ -235,6 +242,7 @@ class Session(Handlers):
                 "人狼-進行", category=origin.category, overwrites=overwrites,
                 topic="ゲームの進行(自動で流れます)")
             self.channel = self.game_channel
+            await origin.send(f"🐺 ゲームの進行は {self.game_channel.mention} で行います。そちらを見てください。")
         except discord.HTTPException:
             self.channel = origin
             await origin.send("⚠️ 進行用のチャンネルを作れませんでした。このチャンネルで進めます。")
@@ -271,11 +279,19 @@ class Session(Handlers):
         g = self.game
         try:
             await self.setup_game_channel()
-            await self.hope_phase()
+            if g.mode == Mode.NOTE:
+                g.assign_note_roles()                       # ワンナイト人狼: 希望役職はなし
+            else:
+                await self.hope_phase()
             await self.setup_channels()
             await self.lock_vc()
             await self.channel.send(embed=self.game_embed(), view=GameView(self))
-            if g.one_night:
+            if g.mode == Mode.NOTE:
+                g.day = 1
+                await self.note_night()
+                await self.discussion()
+                winner = await self.note_vote()
+            elif g.one_night:
                 g.day = 1
                 await self.night()
                 executed = await self.day_and_vote()
@@ -295,7 +311,10 @@ class Session(Handlers):
                     if winner:
                         break
                     g.day += 1
-            await self.finish(winner)
+            if winner == "void":
+                await self.note_void()
+            else:
+                await self.finish(winner)
         except asyncio.CancelledError:
             with contextlib.suppress(discord.HTTPException):
                 await self.channel.send("🛑 ゲームを中止しました。参加費は返金されます。")
@@ -525,7 +544,8 @@ class Session(Handlers):
         if voter not in self.votes:
             await self.channel.send(f"⏱️ **{g.players[voter].name}** さんは時間内に確定しませんでした(棄権)。")
             return
-        await self.speak(voter, C.VOTE_SPEECH_SECONDS, after="silent")
+        await self.speak(voter, C.VOTE_SPEECH_SECONDS, after="silent",
+                         prompt="なぜ投票したのか一言話してください")
         await self.channel.send(
             f"📣 **{g.players[voter].name}** → **{g.players[self.votes[voter]].name}**")
 
@@ -536,7 +556,8 @@ class Session(Handlers):
             title="🗳️ 決選投票", description="同票です: " + "、".join(g.players[c].name for c in leaders)
             + "\n候補の人は、順に短く主張してください。", color=discord.Color.red()))
         for c in leaders:
-            await self.speak(c, C.TIE_SPEECH_SECONDS, after="silent")
+            await self.speak(c, C.TIE_SPEECH_SECONDS, after="silent",
+                             prompt="決選に残った理由を、短く話してください")
         self.votes, self.tie_candidates = {}, leaders
         await self.apply_voice("silent")
         await self.channel.send(embed=discord.Embed(
@@ -603,6 +624,110 @@ class Session(Handlers):
             self.night_event.set()
 
     # ================================================================
+    # ワンナイト人狼(noteのルール)
+    # ================================================================
+    def note_seer(self, uid: int, target: int) -> str:
+        """占い師の行動。target が 0 以上なら参加者、-1 / -2 なら墓地の1枚目 / 2枚目。結果の文を返す。"""
+        g, note = self.game, self.game.note
+        self.note_choices[uid] = target
+        if target < 0:
+            role = note.look_grave(-target - 1)
+            text = f"🔮 墓地の{-target}枚目は **{role}** でした。"
+        else:
+            role = note.look_player(target)
+            text = f"🔮 **{g.players[target].name}** は **{role}** でした。"
+        return text
+
+    def note_thief(self, uid: int, target: int | None) -> str:
+        """怪盗の行動。target が None なら交換しない。夜の終わりに交換する。"""
+        g, note = self.game, self.game.note
+        self.note_choices[uid] = target
+        if target is None:
+            return "🎭 今夜は交換しません。"
+        return (f"🎭 **{g.players[target].name}** と交換します。"
+                f"夜の終わりに、あなたは **{note.roles[target]}** になります。")
+
+    async def note_night(self) -> None:
+        g = self.game
+        g.phase = Phase.NIGHT
+        g.reset_night()
+        self.night_replies = {}
+        self.note_choices = {}
+        self.pending_night = {u for u, p in g.players.items() if p.role in ("占い師", "怪盗")}
+        self.night_event.clear()
+        await self.apply_voice("night")
+        await self.set_wolf_chat(True)
+        msg = await self.channel.send(embed=discord.Embed(
+            title=f"🌙 夜({C.NIGHT_SECONDS}秒)",
+            description=("占い師と怪盗は「夜の行動」を押してください。"
+                         "人狼は、押すと仲間が分かります。村人は何もしません。"),
+            color=discord.Color.dark_blue()), view=NightView(self))
+        if not self.pending_night:
+            self.night_event.set()
+        await wait_event(self.night_event, C.NIGHT_SECONDS)
+        with contextlib.suppress(discord.HTTPException):
+            await msg.edit(view=None)
+
+        note = g.note
+        for uid in list(self.pending_night):             # 時間切れは、占いはランダム・怪盗は交換しない
+            if g.players[uid].role == "占い師":
+                options = [t.user_id for t in g.players.values() if t.user_id != uid]
+                self.note_seer(uid, random.choice(options))
+            else:
+                self.note_thief(uid, None)
+        self.pending_night.clear()
+
+        thief = next((u for u, p in g.players.items() if p.role == "怪盗" and u in self.note_choices), None)
+        if thief is not None and self.note_choices.get(thief) is not None:
+            note.swap(thief, self.note_choices[thief])
+            g.sync_note_roles()
+        await self.reveal_night_replies()
+        await asyncio.sleep(C.RESULT_DELAY)
+
+    async def note_vote(self) -> str:
+        """投票(1人1票)。戻り値は勝った陣営("village" / "wolf" / "all" / "void")。"""
+        g, note = self.game, self.game.note
+        g.phase = Phase.VOTE
+        self.note_votes = {}
+        self.note_vote_done = asyncio.Event()
+        await self.apply_voice("silent")
+        peace = not note.wolves()
+        msg = await self.channel.send(embed=discord.Embed(
+            title=f"🗳️ 投票({C.NOTE_VOTE_SECONDS}秒)",
+            description=("1人1票で、人狼だと思う人に投票してください。"
+                         + ("\n墓地は2枚とも人狼です。プレイヤーに人狼はいません。「平和村を願う」に投票できます。" if peace else "")),
+            color=discord.Color.red()), view=NoteVoteView(self))
+        await wait_event(self.note_vote_done, C.NOTE_VOTE_SECONDS)
+        with contextlib.suppress(discord.HTTPException):
+            await msg.edit(view=None)
+
+        winner, executed = NR.resolve_vote(note, self.note_votes)
+        counts = Counter(self.note_votes.values())
+        names = {PEACE_ID: "平和村を願う"}
+        lines = [f"・{names.get(t, g.players[t].name if t in g.players else '?')}: {c}票"
+                 for t, c in counts.most_common()] or ["(投票なし)"]
+        if winner == "void":
+            await self.channel.send("📊 投票結果\n" + "\n".join(lines) + "\n\n平和村は一番になりませんでした。このゲームは無効です(参加費は返します)。")
+            return "void"
+        if executed:
+            names_exec = "、".join(g.players[e].name for e in executed)
+            roles_exec = "、".join(note.roles[e] for e in executed)
+            await self.channel.send("📊 投票結果\n" + "\n".join(lines)
+                                    + f"\n\n⚖️ 処刑: **{names_exec}**({roles_exec})")
+            for e in executed:
+                g.kill(e)
+        else:
+            await self.channel.send("📊 投票結果\n" + "\n".join(lines) + "\n\n票がバラバラのため、処刑はありません。")
+        return winner
+
+    async def note_void(self) -> None:
+        """平和村が一番にならなかったゲーム。参加費を返して終わる。"""
+        self.refund()
+        self.game.phase = Phase.ENDED
+        self.finished = True
+        await self.channel.send("🔁 このゲームは無効になりました。参加費を返しました。")
+
+    # ================================================================
     # 終了・中止
     # ================================================================
     async def finish(self, winner: str) -> None:
@@ -612,7 +737,8 @@ class Session(Handlers):
         s = g.settlement(winner, self.payers)
         for uid, amount in s.final.items():
             self.store.add(self.guild.id, uid, amount)
-        title = {"village": "🏘️ 村人陣営の勝利!", "wolf": "🐺 人狼陣営の勝利!"}[winner]
+        title = {"village": "🏘️ 村人陣営の勝利!", "wolf": "🐺 人狼陣営の勝利!",
+                 "all": "🕊️ 平和村! 全員の勝利"}[winner]
         embed = discord.Embed(title=title, description="**全員の役職**\n" + g.role_summary(),
                               color=discord.Color.green())
         lines = [f"・{g.players[u].name}{'' if u in self.payers else '(免除)'}"

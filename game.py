@@ -6,6 +6,7 @@ from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 
+import note_rules as NR
 import points
 from roles import (
     CO_CHOICES, ROLES, SURVEY_ROLES, composition_text, default_composition, validate_composition,
@@ -27,7 +28,8 @@ class Phase(Enum):
 
 class Mode(Enum):
     FULL = "人狼ゲーム"
-    ONE_NIGHT = "ワンナイト人狼"
+    ONE_NIGHT = "簡略化人狼"
+    NOTE = "ワンナイト人狼"
 
 
 @dataclass
@@ -62,6 +64,7 @@ class Game:
         self.seats: list[int] = []                 # 席順(開始時にランダムで決める)
         self.custom_composition: dict[str, int] | None = None
         self.mode = Mode.FULL
+        self.note: NR.NoteGame | None = None       # ワンナイト人狼の配役・墓地
         self.mode_override: Mode | None = None     # 主催者が選んだモード(None なら人数で自動)
         self.phase = Phase.LOBBY
         self.day = 0
@@ -124,7 +127,7 @@ class Game:
 
     @property
     def one_night(self) -> bool:
-        return self.mode == Mode.ONE_NIGHT
+        return self.mode in (Mode.ONE_NIGHT, Mode.NOTE)
 
     def composition(self) -> dict[str, int]:
         if self.custom_composition:
@@ -132,11 +135,30 @@ class Game:
         return default_composition(len(self.players), self.preview_mode() == Mode.ONE_NIGHT)
 
     def composition_error(self) -> str | None:
+        if self.preview_mode() == Mode.NOTE:
+            return None
         return validate_composition(
             self.composition(), len(self.players), self.preview_mode() == Mode.ONE_NIGHT)
 
     def composition_label(self) -> str:
+        if self.preview_mode() == Mode.NOTE:
+            return "人狼2・市民(人数-2)・占い師1・怪盗1(人数+2枚のうち2枚は墓地)"
         return composition_text(self.composition())
+
+    def assign_note_roles(self) -> None:
+        """ワンナイト人狼の配役。余った2枚は墓地に置く。"""
+        deal, grave = NR.make_deck(len(self.players))
+        order = list(self.players)
+        random.shuffle(order)
+        for uid, role in zip(order, deal):
+            self.players[uid].role = role
+            self.players[uid].alive = True
+        self.note = NR.NoteGame(roles={u: self.players[u].role for u in order}, graveyard=grave)
+
+    def sync_note_roles(self) -> None:
+        """怪盗の交換のあと、プレイヤーの役職を配役に合わせる。"""
+        for uid, role in self.note.roles.items():
+            self.players[uid].role = role
 
     def begin(self) -> str | None:
         """開始できるか確認して、モードと席順を決める。問題があればエラーメッセージ。"""
@@ -325,6 +347,12 @@ class Game:
         return total
 
     def settlement(self, winner: str, payers: set[int]) -> points.Settlement:
+        if self.mode == Mode.NOTE and self.note:
+            wins = NR.settle_inputs(self.note, winner)
+            results = [points.Result(uid=u, team=NR.team_of(r), team_won=wins[u], nights_survived=0,
+                                     survived_to_end=False, quit_early=False, role_bonus=0)
+                       for u, r in self.note.roles.items()]
+            return points.settle(results, payers, points.fee_for(True), points.table_for(True))
         results = []
         for p in self.players.values():
             team = ROLES[p.role].team

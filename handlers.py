@@ -5,7 +5,7 @@ import contextlib
 
 import discord
 
-from game import RESULT_LABEL, Phase
+from game import RESULT_LABEL, Mode, Phase
 from roles import ROLES, SURVEY_ROLES
 from views import ConfirmLeaveView, NoteModal, PickView, ResultView
 
@@ -68,6 +68,9 @@ class Handlers:
         if g.phase != Phase.NIGHT:
             await deny(interaction, "いまは夜ではありません。")
             return
+        if g.mode == Mode.NOTE:
+            await self.note_night_menu(interaction)
+            return
         actors = g.night_actors()
 
         if uid in actors:
@@ -126,6 +129,71 @@ class Handlers:
             return
 
         await deny(interaction, "今夜は、あなたにできる行動はありません。")
+
+    async def note_night_menu(self, interaction: discord.Interaction) -> None:
+        g, note = self.game, self.game.note
+        uid = interaction.user.id
+        p = g.players[uid]
+        if p.role == "人狼":
+            mates = [g.players[u].name for u in note.wolf_partners(uid)]
+            await deny(interaction, "仲間の人狼: " + ("、".join(mates) if mates
+                                                     else "いません(墓地に、もう1人の人狼がいるかもしれません)"))
+            return
+        if uid not in self.pending_night:
+            await deny(interaction, "今夜は、あなたにできる行動はないか、すでに確定しています。")
+            return
+        if p.role == "占い師":
+            options = [(t.user_id, t.name) for t in g.players.values() if t.user_id != uid]
+            options += [(-1, "墓地の1枚目"), (-2, "墓地の2枚目")]
+
+            async def on_pick(i: discord.Interaction, target: int) -> None:
+                text = self.note_seer(uid, target)
+                self.night_replies[uid] = (i, text)
+                await i.response.edit_message(content="🔮 占いました。結果は夜の終わりに表示されます。", view=None)
+                self.pending_night.discard(uid)
+                if not self.pending_night:
+                    self.night_event.set()
+
+            await interaction.response.send_message(
+                "占う相手を選んでください。", view=PickView(options, on_pick, "占う相手"), ephemeral=True)
+            return
+        # 怪盗
+        options = [(t.user_id, t.name) for t in g.players.values() if t.user_id != uid]
+        options.append((-3, "交換しない"))
+
+        async def on_thief(i: discord.Interaction, target: int) -> None:
+            text = self.note_thief(uid, None if target == -3 else target)
+            self.night_replies[uid] = (i, text)
+            await i.response.edit_message(content="🎭 決めました。結果は夜の終わりに表示されます。", view=None)
+            self.pending_night.discard(uid)
+            if not self.pending_night:
+                self.night_event.set()
+
+        await interaction.response.send_message(
+            "交換する相手を選んでください。", view=PickView(options, on_thief, "交換する相手"), ephemeral=True)
+
+    async def note_open_vote(self, interaction: discord.Interaction) -> None:
+        g, note = self.game, self.game.note
+        uid = interaction.user.id
+        p = g.players.get(uid)
+        if p is None or not p.alive or g.phase != Phase.VOTE:
+            await deny(interaction, "いまは投票できません。")
+            return
+        if uid in self.note_votes:
+            await deny(interaction, "すでに投票しています。")
+            return
+        options = [(t.user_id, t.name) for t in g.players.values() if t.alive and t.user_id != uid]
+        if not note.wolves():
+            options.append((PEACE_ID, "平和村を願う"))
+
+        async def on_pick(i: discord.Interaction, target: int) -> None:
+            self.note_votes[uid] = target
+            await i.response.edit_message(content="投票しました。", view=None)
+            if len(self.note_votes) >= len(g.alive_ids()) and not self.note_vote_done.is_set():
+                self.note_vote_done.set()
+
+        await interaction.response.send_message(
+            "投票先を選んでください。", view=PickView(options, on_pick, "投票先"), ephemeral=True)
 
     def survey_targets(self, uid: int) -> list[tuple[int, str]]:
         return [(p.user_id, p.name) for p in self.game.alive_players() if p.user_id != uid]
@@ -229,8 +297,13 @@ class Handlers:
         if g.phase not in (Phase.DAY, Phase.VOTE):
             await deny(interaction, "COは昼の間だけできます。")
             return
+        if role != "撤回" and role not in {q.role for q in g.players.values()}:
+            await deny(interaction, "その役職は、このゲームにいません。")
+            return
         text = g.set_co(p.user_id, role)
-        await deny(interaction, text.replace("📣 ", ""))
+        # COは全員に見せる(通知は通常のメッセージで、CO一覧も更新する)
+        await self.channel.send(text)
+        await deny(interaction, "記録しました。")
         await self.refresh_co_panel()
 
     async def open_report_menu(self, interaction: discord.Interaction) -> None:

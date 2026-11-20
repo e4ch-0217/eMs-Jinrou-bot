@@ -31,6 +31,8 @@ ROLE_LIST = [
 ]
 
 ROLES: dict[str, Role] = {r.name: r for r in ROLE_LIST}
+ROLES["怪盗"] = Role("怪盗", "village", "人間", None, "🎭",
+                    "夜に、他の人と役職を交換できます(任意)。交換したら、新しい役職になります。")
 ROLE_ORDER = [r.name for r in ROLE_LIST]
 
 ONE_NIGHT_ROLES = {"人狼", "狂人", "占い師", "市民"}   # ワンナイトで使える役職
@@ -42,7 +44,7 @@ def default_composition(n: int, one_night: bool) -> dict[str, int]:
     """人数に応じた標準の役職構成。"""
     if one_night:
         comp = {"人狼": 1, "占い師": 1}
-        if n >= 4:
+        if n >= 5:                     # 4人は狂人なし(簡略化人狼の表どおり)
             comp["狂人"] = 1
     else:
         wolves = {6: 1, 7: 2, 8: 2, 9: 2, 10: 3, 11: 3, 12: 3}.get(n, (n + 2) // 4)
