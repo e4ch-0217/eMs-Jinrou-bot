@@ -91,6 +91,22 @@ def test_eight_players_composition():
     assert len(deal) == 8 and len(grave) == 2
 
 
+def test_peace_wins_when_top_alone():
+    g = game({1: N.VILLAGER, 2: N.SEER, 3: N.VILLAGER}, grave=(N.WOLF, N.WOLF))
+    assert N.resolve_vote(g, {1: N.PEACE, 2: N.PEACE, 3: 1}) == ("all", [])
+
+
+def test_peace_tied_with_player_player_executed():
+    g = game({1: N.VILLAGER, 2: N.SEER, 3: N.VILLAGER}, grave=(N.WOLF, N.WOLF))
+    assert N.resolve_vote(g, {1: N.PEACE, 2: 3, 3: 3}) == ("wolf", [3])
+
+
+def test_peace_ignored_when_wolves_in_players():
+    g = game({1: N.WOLF, 2: N.SEER, 3: N.VILLAGER})
+    assert N.resolve_vote(g, {1: N.PEACE, 2: N.PEACE, 3: 1}) == ("wolf", [])   # 平和村は数えない・バラバラ
+    assert N.resolve_vote(g, {1: N.PEACE, 2: N.PEACE, 3: 2}) == ("wolf", [])
+
+
 def test_settle_inputs():
     g = game({1: N.WOLF, 2: N.SEER, 3: N.VILLAGER})
     assert N.settle_inputs(g, "village") == {1: False, 2: True, 3: True}

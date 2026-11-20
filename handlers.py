@@ -6,6 +6,7 @@ import contextlib
 import discord
 
 import config as C
+import note_rules as NR
 from game import RESULT_LABEL, Mode, Phase
 from roles import ROLES, SURVEY_ROLES, WOLF_SIDE_CO
 from views import ConfirmCOView, ConfirmLeaveView, NoteModal, PickView, ResultView
@@ -50,7 +51,7 @@ class Handlers:
 
     async def join_spectators(self, interaction: discord.Interaction) -> None:
         p = self.game.players.get(interaction.user.id)
-        if p and p.alive:
+        if p and p.alive and not self.finished:        # 終わったあとは、生存者も観戦できる
             await deny(interaction, "生存中の参加者は観戦できません。")
             return
         if self.heaven is None:
@@ -186,10 +187,14 @@ class Handlers:
             await deny(interaction, "すでに投票しています。")
             return
         options = [(t.user_id, t.name) for t in g.players.values() if t.alive and t.user_id != uid]
+        if not note.wolves():
+            options.append((NR.PEACE, "平和村を願う"))
 
         async def on_pick(i: discord.Interaction, target: int) -> None:
             self.note_votes[uid] = target
             await i.response.edit_message(content="投票しました。", view=None)
+            tname = "平和村を願う" if target == NR.PEACE else g.players[target].name
+            await self.to_heaven(f"🗳️ {g.players[uid].name} → {tname}")
             if len(self.note_votes) >= len(g.alive_ids()) and not self.note_vote_done.is_set():
                 self.note_vote_done.set()
 
@@ -274,6 +279,7 @@ class Handlers:
             self.votes[voter] = target
             await i.response.edit_message(
                 content=f"🗳️ **{g.players[target].name}** に確定しました。理由を話してください。", view=None)
+            await self.to_heaven(f"🗳️ {g.players[voter].name} → {g.players[target].name}")
 
         await interaction.response.send_message(
             f"⏳ {C.VOTE_CONFIRM_SECONDS}秒以内に投票先を確定してください。\n"

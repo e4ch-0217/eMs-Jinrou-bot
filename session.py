@@ -801,7 +801,9 @@ class Session(Handlers):
         await self.apply_voice("silent")
         msg = await self.channel.send(embed=discord.Embed(
             title=f"🗳️ 投票({C.NOTE_VOTE_SECONDS}秒)",
-            description="1人1票で、追放したい人に投票してください。",
+            description=("1人1票で、追放したい人に投票してください。"
+                         + ("\n墓地は2枚とも人狼です。プレイヤーに人狼はいません。「平和村を願う」に投票できます。"
+                            if not note.wolves() else "")),
             color=discord.Color.red()), view=NoteVoteView(self))
         await wait_event(self.note_vote_done, C.NOTE_VOTE_SECONDS)
         with contextlib.suppress(discord.HTTPException):
@@ -809,9 +811,8 @@ class Session(Handlers):
 
         winner, executed = NR.resolve_vote(note, self.note_votes)
         counts = Counter(self.note_votes.values())
-        for voter, target in self.note_votes.items():
-            await self.to_heaven(f"🗳️ {g.players[voter].name} → {g.players[target].name}")
-        lines = [f"・{g.players[t].name}: {c}票" for t, c in counts.most_common()] or ["(投票なし)"]
+        lines = [f"・{'平和村を願う' if t == NR.PEACE else g.players[t].name}: {c}票"
+                 for t, c in counts.most_common()] or ["(投票なし)"]
         if executed:
             names_exec = "、".join(g.players[e].name for e in executed)
             roles_exec = "、".join(note.roles[e] for e in executed)

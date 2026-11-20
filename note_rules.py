@@ -17,6 +17,7 @@ from dataclasses import dataclass
 WOLF, VILLAGER, SEER, THIEF, MADMAN = "人狼", "市民", "占い師", "怪盗", "狂人"
 MIN_PLAYERS = 3
 MAX_PLAYERS = 8
+PEACE = -1          # 「平和村を願う」(投票の選択肢。プレイヤーに人狼がいないときだけ出る)
 
 # 人数: (人狼, 占い師, 怪盗, 狂人, 市民)。配る枚数は人数ぶん。
 COUNTS = {
@@ -78,11 +79,15 @@ def resolve_vote(g: NoteGame, votes: dict[int, int]) -> tuple[str, list[int]]:
     """投票の結果。戻り値: (勝った陣営, 処刑される人)。
     勝った陣営は "village" / "wolf" / "all"(平和村=全員の勝ち)。
     votes は {投票した人: 投票先}。"""
-    counts = Counter(t for t in votes.values() if t in g.roles)
+    peace_ok = not g.wolves()                           # 平和村は、人狼がいないときだけ選べる
+    counts = Counter(t for t in votes.values() if t in g.roles or (t == PEACE and peace_ok))
     top = max(counts.values(), default=0)
+    leaders = [t for t, c in counts.items() if c == top]
+    if leaders == [PEACE]:                              # 平和村が一番(1人だけ)
+        return "all", []
     if top <= 1:                                        # 全員バラバラ: 処刑なし
         return ("wolf" if g.wolves() else "all"), []
-    executed = [t for t, c in counts.items() if c == top]   # 同数の1位は全員処刑
+    executed = [t for t in leaders if t != PEACE]       # 同数の1位は全員処刑(平和村は処刑しない)
     if any(g.roles[e] == WOLF for e in executed):
         return "village", executed
     return "wolf", executed
