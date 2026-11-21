@@ -1,7 +1,7 @@
 """追加役職(狂信者・囁き狂人・共有者・囁き共有者・大狼・猫又)のルールのテスト。 `python test_extra.py` で実行できます。"""
 import points
 from game import Game
-from roles import ATTACKERS, EXTRA_ROLES, ROLES, parse_composition, validate_composition
+from roles import ATTACKERS, EXTRA_ROLES, ROLES, WOLF_CHAT_ROLES, parse_composition, validate_composition
 
 
 def make_game(comp):
@@ -21,7 +21,7 @@ def set_roles(g, roles):
 
 
 def test_extra_roles_defined():
-    assert set(EXTRA_ROLES) == {"狂信者", "囁き狂人", "共有者", "囁き共有者", "大狼", "猫又"}
+    assert set(EXTRA_ROLES) == {"狂信者", "囁き狂人", "共有者", "囁き共有者", "大狼", "静かな人狼", "平和主義者", "猫又"}
     assert all(ROLES[r].extra for r in EXTRA_ROLES)
     assert ROLES["大狼"].team == "wolf" and ROLES["大狼"].seen_as == "人間"
     assert ROLES["狂信者"].team == "wolf" and ROLES["狂信者"].seen_as == "人間"
@@ -91,7 +91,9 @@ def test_great_wolf_attack_counts_kills_and_resolves():
 
 
 def test_all_wolf_roles_are_attackers_set():
-    assert set(ATTACKERS) == {"人狼", "大狼"}
+    assert set(ATTACKERS) == {"人狼", "大狼", "静かな人狼"}
+    assert "静かな人狼" in WOLF_CHAT_ROLES
+    assert ROLES["静かな人狼"].team == "wolf" and ROLES["静かな人狼"].seen_as == "人狼"
     assert ROLES["大狼"].night_action == "attack"
 
 
@@ -118,6 +120,25 @@ def test_settlement_applies_multiplier_only_to_extra_roles():
     # 猫又(追加役職・村人陣営)は、市民より多く受け取る(勝利報酬が1.5倍。生還20ptと上限の調整は別)
     assert s.final[2] > s.final[3] > 0
     assert s.final[3] == s.final[4] == s.final[5]                 # 市民どうしは同じ
+
+
+def test_peace_vote_only_while_pacifist_alive():
+    from collections import Counter
+    g = make_game({"人狼": 1, "平和主義者": 1, "市民": 6})
+    set_roles(g, {0: "人狼", 1: "平和主義者", **{i: "市民" for i in range(2, 8)}})
+    assert g.peace_available()
+    g.kill(1)
+    assert not g.peace_available()
+
+
+def test_peace_wins_only_when_strictly_more_than_top_player():
+    from collections import Counter
+    from game import Game
+    g = make_game({"人狼": 1, "平和主義者": 1, "市民": 6})
+    assert g.peace_wins(Counter({3: 2}), 3)          # 誰も3票 > 最多2票 -> 処刑なし
+    assert not g.peace_wins(Counter({3: 2}), 2)      # 同数 -> プレイヤーだけで決選
+    assert not g.peace_wins(Counter(), 0)
+    assert g.target_name(-1) == "誰も追放しない"
 
 
 if __name__ == "__main__":

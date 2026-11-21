@@ -11,7 +11,7 @@ import discord
 
 import config as C
 import points
-from game import MIN_PLAYERS, RESULT_LABEL, Game, Mode, Phase
+from game import MIN_PLAYERS, PEACE_VOTE, RESULT_LABEL, Game, Mode, Phase
 from handlers import Handlers
 import note_rules as NR
 from roles import ATTACKERS, ROLES, SURVEY_ROLES, WOLF_CHAT_ROLES
@@ -489,7 +489,12 @@ class Session(Handlers):
         # 次の朝までVCに戻らなかった人(襲撃された人は除く)
         gone = [uid for uid in list(self.absent) if uid != victim
                 and g.players[uid].alive and not self.in_vc(self.member(uid))]
-        if victim is not None:
+        silenced = victim is not None and any(
+            x.role == "静かな人狼" and x.alive for x in g.players.values())   # 静かな人狼が生きていると、遺言はない
+        if victim is not None and silenced:
+            desc = (f"昨夜、**{g.players[victim].name}** が襲撃されました。\n"
+                    "🤫 静かな人狼がいるため、遺言はありません。")
+        elif victim is not None:
             desc = (f"昨夜、**{g.players[victim].name}** が襲撃されました。\n"
                     f"({C.VICTIM_WILL_SECONDS}秒、進行に関係ないことだけ話せます)")
         else:
@@ -500,7 +505,10 @@ class Session(Handlers):
         await self.channel.send(embed=discord.Embed(
             title="☀️ おはようございます", description=desc, color=discord.Color.gold()))
         if victim is not None:
-            await self.speak(victim, C.VICTIM_WILL_SECONDS, after="silent")
+            if silenced:
+                await asyncio.sleep(C.SILENT_SECONDS)     # 遺言なしのとき、発表を読む間
+            else:
+                await self.speak(victim, C.VICTIM_WILL_SECONDS, after="silent")
             await self.kill(victim)
             await self.nekomata_follow(victim, "attack")
         else:
@@ -519,7 +527,7 @@ class Session(Handlers):
             await self.check_outcome()
 
     # ---------- 昼 ----------
-    async def day_and_vote(self) -> int:
+    async def day_and_vote(self) -> int | None:
         await self.discussion()
         return await self.vote()
 
@@ -576,7 +584,7 @@ class Session(Handlers):
             title="⌛ 議論が終了しました", description="まもなく投票が始まります。", color=discord.Color.red()))
 
     # ---------- 投票 ----------
-    async def vote(self) -> int:
+    async def vote(self) -> int | None:
         """席順で投票する。割り込み(先着)があればその人が先。同票は決選投票。戻り値は処刑される人。"""
         g = self.game
         g.phase = Phase.VOTE
@@ -600,9 +608,16 @@ class Session(Handlers):
         candidates = g.alive_ids()
         counts, leaders = g.tally(self.votes, candidates)
         g.record_votes(counts)
+        peace_ok = g.peace_available()
+        peace_votes = sum(1 for t in self.votes.values() if t == PEACE_VOTE)
         summary = "、".join(f"{g.players[c].name} {counts.get(c, 0)}票" for c in candidates)
+        if peace_ok:
+            summary += f"、誰も追放しない {peace_votes}票"
         await self.channel.send(embed=discord.Embed(
             title="📊 投票結果", description=f"**{summary}**", color=discord.Color.red()))
+        if peace_ok and g.peace_wins(counts, peace_votes):
+            await self.channel.send("🕊️ 「誰も追放しない」がいちばん多いので、今日は誰も処刑されません。")
+            return None
         if len(leaders) > 1:
             leaders = await self.tie_break(leaders)
         executed = random.choice(leaders)                  # 決選でも同数ならランダム
@@ -627,8 +642,8 @@ class Session(Handlers):
         # ミュートに戻す処理と、結果の表示を同時にする(次の人の番を、早く出すため)
         await asyncio.gather(
             self.apply_voice("silent"),
-            self.channel.send(f"📣 **{g.players[voter].name}** → **{g.players[self.votes[voter]].name}**"),
-            self.to_heaven(f"🗳️ {g.players[voter].name} → {g.players[self.votes[voter]].name}"))
+            self.channel.send(f"📣 **{g.players[voter].name}** → **{g.target_name(self.votes[voter])}**"),
+            self.to_heaven(f"🗳️ {g.players[voter].name} → {g.target_name(self.votes[voter])}"))
 
     async def tie_break(self, leaders: list[int]) -> list[int]:
         """決選投票。候補者は主張し、投票はできない。"""
@@ -928,6 +943,10 @@ class Session(Handlers):
         for c in channels:
             with contextlib.suppress(discord.HTTPException):
                 await c.send(f"このチャンネルは{C.CLEANUP_SECONDS}秒後に削除されます。")
+        if channels:                                           # 中止したあとも、今すぐ閉じるボタンを出す
+            with contextlib.suppress(discord.HTTPException):
+                await self.channel.send("🧹 今すぐ閉じる場合は、下のボタンを押してください。\n" + self.close_note(),
+                                        view=CloseNowView(self))
         if channels:
             with contextlib.suppress(asyncio.TimeoutError):   # この間は、生存者も天国を観戦できる
                 await asyncio.wait_for(self.close_now.wait(), C.CLEANUP_SECONDS)

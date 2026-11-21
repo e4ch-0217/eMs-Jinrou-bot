@@ -13,6 +13,7 @@ from roles import (
 )
 
 MIN_PLAYERS = 3
+PEACE_VOTE = -1      # 投票の「誰も追放しない」(平和主義者が生きている間だけ出る)
 FULL_MIN_PLAYERS = 6   # この人数以上なら人狼ゲーム、未満ならワンナイト
 MAX_PLAYERS = 20
 RESULT_LABEL = {"人間": "人間(白)", "人狼": "人狼(黒)"}
@@ -303,6 +304,17 @@ class Game:
                          if v in self.players and self.players[v].alive and t in candidates and t != v)
         top = max((counts.get(c, 0) for c in candidates), default=0)
         return counts, [c for c in candidates if counts.get(c, 0) == top]
+
+    def peace_available(self) -> bool:
+        """「誰も追放しない」が投票に出るか(平和主義者が生きている間)。"""
+        return any(p.role == "平和主義者" and p.alive for p in self.players.values())
+
+    def peace_wins(self, counts: Counter, peace_votes: int) -> bool:
+        """「誰も追放しない」の票が、いちばん多い人の票より多ければ、処刑なし。同数なら、プレイヤーだけで決める。"""
+        return peace_votes > max(counts.values(), default=0)
+
+    def target_name(self, uid: int) -> str:
+        return "誰も追放しない" if uid == PEACE_VOTE else self.players[uid].name
 
     def record_votes(self, counts: Counter) -> None:
         for uid, c in counts.items():

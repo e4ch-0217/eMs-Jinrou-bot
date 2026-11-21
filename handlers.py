@@ -7,7 +7,7 @@ import discord
 
 import config as C
 import note_rules as NR
-from game import RESULT_LABEL, Mode, Phase
+from game import PEACE_VOTE, RESULT_LABEL, Mode, Phase
 from roles import ATTACKERS, ROLES, SHARER_ROLES, SURVEY_ROLES, WOLF_CHAT_ROLES, WOLF_SIDE_CO
 from views import ConfirmCOView, ConfirmLeaveView, NoteModal, PickView, ResultView
 
@@ -291,12 +291,14 @@ class Handlers:
             return
         g = self.game
         candidates = [(u, g.players[u].name) for u in g.alive_ids() if u != voter]
+        if g.peace_available():
+            candidates.append((PEACE_VOTE, "誰も追放しない"))
 
         async def on_pick(i: discord.Interaction, target: int) -> None:
             self.votes[voter] = target
             await i.response.edit_message(
-                content=f"🗳️ **{g.players[target].name}** に確定しました。理由を話してください。", view=None)
-            await self.to_heaven(f"🗳️ {g.players[voter].name} → {g.players[target].name}")
+                content=f"🗳️ **{g.target_name(target)}** に確定しました。理由を話してください。", view=None)
+            await self.to_heaven(f"🗳️ {g.players[voter].name} → {g.target_name(target)}")
 
         await interaction.response.send_message(
             f"⏳ {C.VOTE_CONFIRM_SECONDS}秒以内に投票先を確定してください。\n"
