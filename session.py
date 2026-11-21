@@ -833,7 +833,8 @@ class Session(Handlers):
         for uid in list(self.pending_night):             # 時間切れは、占いはランダム・怪盗は交換しない
             if g.players[uid].role == "占い師":
                 options = [t.user_id for t in g.players.values() if t.user_id != uid]
-                self.note_seer(uid, random.choice(options))
+                text = self.note_seer(uid, random.choice(options))
+                self.seer_results.setdefault(uid, []).append("⏱️ 時間切れのため、ランダムに占いました。\n" + text)
             else:
                 self.note_thief(uid, None)
         self.pending_night.clear()
