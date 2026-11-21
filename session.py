@@ -69,6 +69,7 @@ class Session(Handlers):
         self.night_replies: dict[int, tuple[discord.Interaction, str]] = {}  # 夜の終わりに書き換える表示
         self.last_night = None
         self.first_night_info: dict[int, str] = {}
+        self.seer_results: dict[int, list[str]] = {}   # 占い師ごとの、夜の結果の記録(役職を確認で見られる)
         self.medium_text: str | None = None
 
         # 昼・投票
@@ -427,7 +428,11 @@ class Session(Handlers):
         for uid in list(self.pending_night):           # 時間切れの行動は、ランダム
             targets = g.night_targets(uid, actors[uid])
             if targets:
-                g.record_night_action(uid, actors[uid], random.choice(targets).user_id)
+                t = random.choice(targets).user_id
+                r = g.record_night_action(uid, actors[uid], t)
+                if actors[uid] == "divine":
+                    self.seer_results.setdefault(uid, []).append(
+                        f"🔮 時間切れのため、**{g.players[t].name}** を占いました。結果: **{RESULT_LABEL[r]}**")
         self.pending_night.clear()
 
         res = g.resolve_night()
@@ -438,12 +443,16 @@ class Session(Handlers):
         await asyncio.sleep(C.RESULT_DELAY)
 
     async def reveal_night_replies(self) -> None:
-        """確定のときは何も出さず、結果は夜の終わりに一斉に表示する(確定の早さを読まれないため)。"""
-        async def edit(inter: discord.Interaction, text: str) -> None:
-            with contextlib.suppress(discord.HTTPException):
+        """確定のときは何も出さず、結果は夜の終わりに一斉に表示する(確定の早さを読まれないため)。
+        結果は seer_results にも残し、「役職を確認」で見られるようにする。"""
+        async def edit(uid: int, inter: discord.Interaction, text: str) -> None:
+            self.seer_results.setdefault(uid, []).append(text)
+            try:
                 await inter.edit_original_response(content=text, view=None)
+            except discord.HTTPException:
+                log.exception("夜の結果を表示できませんでした(uid=%s)", uid)
 
-        await asyncio.gather(*(edit(i, t) for i, t in self.night_replies.values()))
+        await asyncio.gather(*(edit(u, i, t) for u, (i, t) in self.night_replies.items()))
 
     async def post_night_log(self, res) -> None:
         g = self.game

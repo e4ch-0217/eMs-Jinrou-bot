@@ -43,6 +43,8 @@ class Handlers:
             text += "\n\n他の共有者: " + ("、".join(mates) if mates else "いません(あなた1人です)")
             if p.role == "囁き共有者" and self.share_channel:
                 text += "\n夜の間だけ「共有者の巣」で、囁き共有者どうしで相談できます。"
+        for line in self.seer_results.get(uid, []):
+            text += "\n\n" + line
         if uid in self.first_night_info:
             text += "\n\n" + self.first_night_info[uid]
         if p.role == "霊媒師" and self.medium_text:
