@@ -9,7 +9,7 @@ from enum import Enum
 import note_rules as NR
 import points
 from roles import (
-    CO_CHOICES, ROLES, SURVEY_ROLES, composition_text, default_composition, validate_composition,
+    ATTACKERS, CO_CHOICES, ROLES, SURVEY_ROLES, composition_text, default_composition, validate_composition,
 )
 
 MIN_PLAYERS = 3
@@ -223,7 +223,7 @@ class Game:
     def night_targets(self, user_id: int, act: str) -> list[Player]:
         alive = self.alive_players()
         if act == "attack":
-            return [p for p in alive if p.role != "人狼"]
+            return [p for p in alive if p.role not in ATTACKERS]
         if act == "guard":
             return [p for p in alive if p.user_id != user_id and p.user_id != self.last_guard_target]
         return [p for p in alive if p.user_id != user_id]
@@ -254,14 +254,14 @@ class Game:
 
     def random_white(self, seer_id: int) -> Player | None:
         """初日の占い。人狼でも本人でもない人をランダムに選ぶ。"""
-        pool = [p for p in self.alive_players() if p.role != "人狼" and p.user_id != seer_id]
+        pool = [p for p in self.alive_players() if p.role not in ATTACKERS and p.user_id != seer_id]
         return random.choice(pool) if pool else None
 
     def resolve_night(self) -> NightResult:
         """襲撃先を決める。護衛が当たっていれば victim は None。"""
         if self.one_night:                       # 簡略化人狼は、夜が1回だけで、襲撃はしない
             return NightResult(None, self.guard_target, None, self.divine)
-        pool = [p.user_id for p in self.alive_players() if p.role != "人狼"]
+        pool = [p.user_id for p in self.alive_players() if p.role not in ATTACKERS]
         attack: int | None = None
         if self.attack_votes:
             counts = Counter(self.attack_votes.values())
@@ -276,7 +276,7 @@ class Game:
         """夜の結果を記録する(襲撃成功・GJ・夜を越えた回数)。死亡の処理は呼び出し側。"""
         if res.victim is not None:
             for p in self.alive_players():
-                if p.role == "人狼":
+                if p.role in ATTACKERS:
                     p.kills += 1
         elif res.attack_target is not None and res.attack_target == res.guard_target and self.guard_actor is not None:
             self.players[self.guard_actor].gj += 1
@@ -315,7 +315,7 @@ class Game:
     def check_winner(self) -> str | None:
         """人狼ゲームの勝敗。"village" / "wolf" / None(続行)。"""
         alive = self.alive_players()
-        wolves = sum(1 for p in alive if p.role == "人狼")
+        wolves = sum(1 for p in alive if p.role in ATTACKERS)    # 人狼と大狼
         if wolves == 0:
             return "village"
         if wolves >= len(alive) - wolves:
@@ -339,7 +339,7 @@ class Game:
                 total += b["狂人_無投票勝利"]
         elif p.role == "騎士":
             total += b["騎士_GJ"] * min(p.gj, points.KNIGHT_GJ_LIMIT)
-        elif p.role == "人狼":
+        elif p.role in ATTACKERS:
             total += b["人狼_襲撃成功"] * p.kills
         elif p.role == "占い師":
             total += b["占い師_人狼発見"] * len(self.seer_found)
@@ -363,7 +363,8 @@ class Game:
             results.append(points.Result(
                 uid=p.user_id, team=team, team_won=(team == winner), nights_survived=p.nights,
                 survived_to_end=p.alive and not p.quit_early, quit_early=p.quit_early,
-                role_bonus=self.role_bonus(p, winner), left=p.left))
+                role_bonus=self.role_bonus(p, winner), left=p.left,
+                win_mult=points.EXTRA_ROLE_WIN_MULT if (ROLES[p.role].extra and not self.one_night) else 1.0))
         return points.settle(results, payers, points.fee_for(self.one_night), points.table_for(self.one_night))
 
     # ---------- COの記録 ----------

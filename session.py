@@ -14,7 +14,7 @@ import points
 from game import MIN_PLAYERS, RESULT_LABEL, Game, Mode, Phase
 from handlers import Handlers
 import note_rules as NR
-from roles import ROLES, SURVEY_ROLES
+from roles import ATTACKERS, ROLES, SURVEY_ROLES, WOLF_CHAT_ROLES
 from collections import Counter
 from views import (COView, CloseNowView, SpectateView, ConfirmVoteView, DayView, GameView, HopeView, JumpView, NightView,
                    NoteVoteView, SpeakEndView, TieVoteView)
@@ -48,6 +48,7 @@ class Session(Handlers):
         self.co_message: discord.Message | None = None
         self.heaven: discord.TextChannel | None = None
         self.wolf_channel: discord.TextChannel | None = None
+        self.share_channel: discord.TextChannel | None = None   # 囁き共有者の相談部屋(囁き共有者が2人以上のとき)
         self.task: asyncio.Task | None = None
         self.started = self.finished = self.cleaned = False
         self.spectate_msg: discord.Message | None = None  # 観戦ボタンのメッセージ(終わったら消す)
@@ -146,8 +147,18 @@ class Session(Handlers):
             return
         with contextlib.suppress(discord.HTTPException):
             for p in self.game.players.values():
-                if p.role == "人狼" and self.member(p.user_id):
+                if p.role in WOLF_CHAT_ROLES and self.member(p.user_id):
                     await self.wolf_channel.set_permissions(
+                        self.member(p.user_id), view_channel=True, send_messages=open_)
+
+    async def set_share_chat(self, open_: bool) -> None:
+        """共有者の巣(囁き共有者の相談部屋)は、夜の間だけ書き込める。"""
+        if not self.share_channel:
+            return
+        with contextlib.suppress(discord.HTTPException):
+            for p in self.game.players.values():
+                if p.role == "囁き共有者" and self.member(p.user_id):
+                    await self.share_channel.set_permissions(
                         self.member(p.user_id), view_channel=True, send_messages=open_)
 
     async def kill(self, uid: int) -> None:
@@ -263,8 +274,8 @@ class Session(Handlers):
             self.heaven = await self.guild.create_text_channel(
                 "天国", category=self.channel.category, overwrites=dict(hidden),
                 topic="死んだ人と観戦者だけが見られるチャンネル")
-            wolves = [p for p in g.players.values() if p.role == "人狼"]
-            if len(wolves) >= 2:
+            wolves = [p for p in g.players.values() if p.role in WOLF_CHAT_ROLES]   # 人狼・大狼・囁き狂人
+            if len(wolves) >= 2 and any(p.role in ATTACKERS for p in wolves):
                 overwrites = dict(hidden)
                 for w in wolves:
                     if self.member(w.user_id):
@@ -273,8 +284,18 @@ class Session(Handlers):
                 self.wolf_channel = await self.guild.create_text_channel(
                     "人狼の巣", category=self.channel.category, overwrites=overwrites,
                     topic="人狼だけの相談部屋(夜だけ書き込めます)")
+            whisperers = [p for p in g.players.values() if p.role == "囁き共有者"]
+            if len(whisperers) >= 2:
+                overwrites = dict(hidden)
+                for w in whisperers:
+                    if self.member(w.user_id):
+                        overwrites[self.member(w.user_id)] = discord.PermissionOverwrite(
+                            view_channel=True, send_messages=False)
+                self.share_channel = await self.guild.create_text_channel(
+                    "共有者の巣", category=self.channel.category, overwrites=overwrites,
+                    topic="囁き共有者だけの相談部屋(夜だけ書き込めます)")
         except discord.HTTPException:
-            await self.channel.send("⚠️ チャンネルを作れませんでした。天国と人狼の部屋なしで進めます。")
+            await self.channel.send("⚠️ チャンネルを作れませんでした。天国と相談部屋なしで進めます。")
         if self.heaven:
             if g.mode == Mode.NOTE:   # ワンナイト人狼: 役職は、処刑されたときとゲーム終了時だけ公開する
                 await self.to_heaven("👀 **天国へようこそ。** 役職は、処刑されたときとゲーム終了時に公開されます。")
@@ -374,6 +395,7 @@ class Session(Handlers):
                         f"🔮 初日の占い: **{target.name}** は **{RESULT_LABEL['人間']}** です。")
         await self.apply_voice("night")
         await self.set_wolf_chat(True)
+        await self.set_share_chat(True)
         await self.channel.send(embed=discord.Embed(
             title="🌙 恐ろしい夜がやってきました(初日)",
             description="襲撃はありません。占い師には、ランダムな「人間」が1人伝えられます。",
@@ -390,6 +412,7 @@ class Session(Handlers):
         self.night_event.clear()
         await self.apply_voice("night")
         await self.set_wolf_chat(True)
+        await self.set_share_chat(True)
         msg = await self.channel.send(embed=discord.Embed(
             title=f"🌙 恐ろしい夜がやってきました({g.day}日目・{C.NIGHT_SECONDS}秒)",
             description=("行動する人は「夜の行動」を押してください(市民・霊媒師・狂人は、怪しい人アンケートです)。\n"
@@ -470,6 +493,7 @@ class Session(Handlers):
         if victim is not None:
             await self.speak(victim, C.VICTIM_WILL_SECONDS, after="silent")
             await self.kill(victim)
+            await self.nekomata_follow(victim, "attack")
         else:
             await asyncio.sleep(C.MORNING_SECONDS)
         for uid in gone:
@@ -512,6 +536,7 @@ class Session(Handlers):
         self.skip_event.clear()
         self.ext_pending = False                    # 延長は1試合で2回まで(ext_used は引き継ぐ)
         await self.set_wolf_chat(False)
+        await self.set_share_chat(False)
         await self.apply_voice("day")
 
         secs = ceil_to_30(len(g.alive_players()) * C.DISCUSSION_PER_PLAYER)
@@ -618,11 +643,30 @@ class Session(Handlers):
             f"{g.players[c].name} {counts.get(c, 0)}票" for c in leaders))
         return new_leaders
 
+    async def nekomata_follow(self, uid: int, cause: str) -> None:
+        """猫又の道連れ。襲撃されたら人狼(大狼を含む)を1人、処刑されたら生存者を1人、ランダムで道連れにする。"""
+        g = self.game
+        p = g.players[uid]
+        if p.role != "猫又":
+            return
+        if cause == "attack":
+            pool = [x.user_id for x in g.alive_players() if x.role in ATTACKERS]
+        else:
+            pool = [x.user_id for x in g.alive_players() if x.user_id != uid]
+        if not pool:
+            return
+        target = random.choice(pool)
+        await self.channel.send(
+            f"🐱 猫又 **{p.name}** の道連れで、**{g.players[target].name}** も死亡しました。")
+        await self.kill(target)
+        await self.to_heaven(f"🐱 猫又 {p.name} の道連れ: {g.players[target].name}({g.players[target].role})")
+
     async def executed_will(self, uid: int) -> None:
         g = self.game
         await self.speak(uid, C.EXECUTED_WILL_SECONDS)
         g.record_execution(uid)
         await self.kill(uid)
+        await self.nekomata_follow(uid, "execute")
         label = RESULT_LABEL[ROLES[g.players[uid].role].seen_as]
         self.medium_text = f"👻 処刑された **{g.players[uid].name}** は **{label}** でした。"
         await self.to_heaven(f"⚖️ 処刑: {g.players[uid].name}({g.players[uid].role})")
@@ -684,8 +728,8 @@ class Session(Handlers):
         if not self.started or self.finished:
             return
         g = self.game
-        gone_wolves = [p for p in g.players.values() if p.role == "人狼" and (p.left or p.quit_early)]
-        alive_wolves = [p for p in g.alive_players() if p.role == "人狼"]
+        gone_wolves = [p for p in g.players.values() if p.role in ATTACKERS and (p.left or p.quit_early)]
+        alive_wolves = [p for p in g.alive_players() if p.role in ATTACKERS]
         if gone_wolves and not alive_wolves:
             await self.end_early("village")
         elif len(g.alive_players()) < 3:
@@ -839,7 +883,9 @@ class Session(Handlers):
         embed = discord.Embed(title=title, description="**全員の役職**\n" + g.role_summary(),
                               color=discord.Color.green())
         lines = [f"・{g.players[u].name}{'' if u in self.payers else '(免除)'}"
-                 f"{'(突然死)' if g.players[u].quit_early else ''}{'(退出)' if g.players[u].left else ''}: +{a}pt" for u, a in s.final.items()]
+                 f"{'(突然死)' if g.players[u].quit_early else ''}{'(退出)' if g.players[u].left else ''}"
+                 f"{'(追加役職×' + str(points.EXTRA_ROLE_WIN_MULT) + ')' if ROLES[g.players[u].role].extra and not g.one_night and ROLES[g.players[u].role].team == winner else ''}"
+                 f": +{a}pt" for u, a in s.final.items()]
         embed.add_field(name=f"💰 ポイント(還元率 {round(s.ratio * 100)}%)",
                         value="\n".join(lines)[:1000], inline=False)
         embed.add_field(name="📋 COの記録", value=g.history_text()[:1000], inline=False)
@@ -868,7 +914,7 @@ class Session(Handlers):
             if m:
                 with contextlib.suppress(discord.HTTPException):
                     await self.channel.set_permissions(m, overwrite=None)
-        channels = [c for c in (self.game_channel, self.wolf_channel, self.heaven) if c]
+        channels = [c for c in (self.game_channel, self.wolf_channel, self.share_channel, self.heaven) if c]
         for c in channels:
             with contextlib.suppress(discord.HTTPException):
                 await c.send(f"このチャンネルは{C.CLEANUP_SECONDS}秒後に削除されます。")

@@ -8,7 +8,7 @@ import discord
 import config as C
 import note_rules as NR
 from game import RESULT_LABEL, Mode, Phase
-from roles import ROLES, SURVEY_ROLES, WOLF_SIDE_CO
+from roles import ATTACKERS, ROLES, SHARER_ROLES, SURVEY_ROLES, WOLF_CHAT_ROLES, WOLF_SIDE_CO
 from views import ConfirmCOView, ConfirmLeaveView, NoteModal, PickView, ResultView
 
 
@@ -23,11 +23,26 @@ class Handlers:
         p = g.players[uid]
         role = ROLES[p.role]
         text = f"{role.emoji} あなたの役職は **{role.name}** です({g.mode.value})。\n\n{role.description}"
-        if p.role == "人狼":
-            if sum(1 for w in g.players.values() if w.role == "人狼") >= 2:
+        if p.role in ATTACKERS:
+            if self.wolf_channel:
                 text += "\n夜の間だけ人狼の巣で作戦会議ができます。"
-            mates = [w.name for w in g.players.values() if w.role == "人狼" and w.user_id != uid]
+            mates = [w.name for w in g.players.values() if w.role in ATTACKERS and w.user_id != uid]
             text += "\n\n仲間の人狼: " + ("、".join(mates) if mates else "いません(あなた1人です)")
+            whisperers = [w.name for w in g.players.values() if w.role == "囁き狂人"]
+            if whisperers:
+                text += "\n囁き狂人(あなたたちの味方です): " + "、".join(whisperers)
+        elif p.role in ("狂信者", "囁き狂人"):
+            wolves = [w.name for w in g.players.values() if w.role in ATTACKERS]
+            text += "\n\n人狼: " + "、".join(wolves)
+            if p.role == "囁き狂人" and self.wolf_channel:
+                text += "\n夜の間だけ人狼の巣で、人狼と相談できます。"
+            else:
+                text += "\n(人狼とは会話できません。人狼からは、あなたが誰か分かりません)"
+        if p.role in ("共有者", "囁き共有者"):
+            mates = [w.name for w in g.players.values() if w.role in SHARER_ROLES and w.user_id != uid]
+            text += "\n\n他の共有者: " + ("、".join(mates) if mates else "いません(あなた1人です)")
+            if p.role == "囁き共有者" and self.share_channel:
+                text += "\n夜の間だけ「共有者の巣」で、囁き共有者どうしで相談できます。"
         if uid in self.first_night_info:
             text += "\n\n" + self.first_night_info[uid]
         if p.role == "霊媒師" and self.medium_text:

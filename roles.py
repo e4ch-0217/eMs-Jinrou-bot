@@ -13,6 +13,7 @@ class Role:
     night_action: str | None  # "attack" / "divine" / "guard" / None
     emoji: str
     description: str
+    extra: bool = False       # 追加役職(通常の人狼ゲームで、主催者が /jinro roles で指定したときだけ使う)
 
 
 ROLE_LIST = [
@@ -28,6 +29,21 @@ ROLE_LIST = [
          "夜に1人を襲撃から守ります。自分は守れず、同じ人を2日連続では守れません。"),
     Role("市民", "village", "人間", None, "🏘️",
          "特別な能力はありません。議論と投票で人狼を見つけ出します。"),
+    # ---- 追加役職(基本役職とは別。通常の人狼ゲームだけ) ----
+    Role("狂信者", "wolf", "人間", None, "🙏",
+         "人狼陣営です。人狼が誰かを全員知っていますが、会話はできません。人狼からは、あなたが誰か分かりません。"
+         "占い・霊媒では「人間」と出ます。", extra=True),
+    Role("囁き狂人", "wolf", "人間", None, "🗣️",
+         "人狼陣営です。人狼が誰かを全員知っていて、人狼からも分かります。夜は人狼の巣で、人狼と相談できます。"
+         "占い・霊媒では「人間」と出ます。", extra=True),
+    Role("共有者", "village", "人間", None, "🤝",
+         "村人陣営です。他の共有者が誰かを知っています。夜の行動はありません。", extra=True),
+    Role("囁き共有者", "village", "人間", None, "🔔",
+         "村人陣営です。他の共有者が誰かを知っていて、夜は共有者の巣で、秘密の相談ができます。", extra=True),
+    Role("大狼", "wolf", "人間", "attack", "🌑",
+         "人狼と同じように、夜に1人を襲撃します。人狼の数にも数えます。占いでは「人間」と出ます。", extra=True),
+    Role("猫又", "village", "人間", None, "🐱",
+         "村人陣営です。襲撃されたときは人狼を1人、処刑されたときは生存者を1人ランダムで道連れにします。", extra=True),
 ]
 
 ROLES: dict[str, Role] = {r.name: r for r in ROLE_LIST}
@@ -35,7 +51,11 @@ ROLES["怪盗"] = Role("怪盗", "village", "人間", None, "🎭",
                     "夜に、他の人と役職を交換できます(任意)。交換したら、新しい役職になります。")
 ROLE_ORDER = [r.name for r in ROLE_LIST]
 
-ONE_NIGHT_ROLES = {"人狼", "狂人", "占い師", "市民"}   # ワンナイトで使える役職
+ONE_NIGHT_ROLES = {"人狼", "狂人", "占い師", "市民"}   # ワンナイトで使える役職(追加役職は使えない)
+ATTACKERS = ("人狼", "大狼")                           # 夜に襲撃する役職。人狼の数に数える
+WOLF_CHAT_ROLES = ("人狼", "大狼", "囁き狂人")          # 人狼の巣で話せる役職
+SHARER_ROLES = ("共有者", "囁き共有者")                 # お互いを知っている役職
+EXTRA_ROLES = tuple(r.name for r in ROLE_LIST if r.extra)
 CO_CHOICES = ["占い師", "霊媒師", "騎士", "人狼", "狂人"]       # COできる役職(人狼・狂人は偽COも可)
 WOLF_SIDE_CO = ("人狼", "狂人")                         # 人狼陣営の役職。COの前に確認する
 SURVEY_ROLES = {"市民", "霊媒師", "狂人"}               # 夜に「怪しい人アンケート」に答える役職
@@ -85,9 +105,9 @@ def validate_composition(comp: dict[str, int], n: int, one_night: bool) -> str |
     total = sum(comp.values())
     if total != n:
         return f"役職の合計({total}人)が参加人数({n}人)と合っていません。"
-    wolves = comp.get("人狼", 0)
+    wolves = sum(comp.get(r, 0) for r in ATTACKERS)
     if wolves < 1:
-        return "人狼が1人もいません。"
+        return "人狼(または大狼)が1人もいません。"
     if wolves >= n - wolves:
-        return "人狼が多すぎます(人狼以外より少なくしてください)。"
+        return "人狼(大狼を含む)が多すぎます(人狼以外より少なくしてください)。"
     return None
