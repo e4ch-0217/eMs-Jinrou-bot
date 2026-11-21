@@ -318,6 +318,11 @@ class Handlers:
         if role != "撤回" and role not in {q.role for q in g.players.values()}:
             await deny(interaction, "その役職は、このゲームにいません。")
             return
+        if p.role == "市民" and role in ("占い師", "霊媒師", "騎士"):
+            await interaction.response.send_message(
+                f"⚠️ あなたは市民です。{role}をCOすると、**役職騙り**になります。役職騙りしますか?",
+                view=ConfirmCOView(self, p.user_id, role), ephemeral=True)
+            return
         if role in WOLF_SIDE_CO:
             text = "⚠️ あなたは人狼陣営として、カミングアウトしようとしています。本当によろしいですか?"
             if ROLES[p.role].team == "village":

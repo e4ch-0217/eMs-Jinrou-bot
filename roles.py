@@ -36,7 +36,7 @@ ROLES["怪盗"] = Role("怪盗", "village", "人間", None, "🎭",
 ROLE_ORDER = [r.name for r in ROLE_LIST]
 
 ONE_NIGHT_ROLES = {"人狼", "狂人", "占い師", "市民"}   # ワンナイトで使える役職
-CO_CHOICES = ["占い師", "霊媒師", "騎士", "市民", "人狼", "狂人"]       # COできる役職(人狼・狂人は偽COも可)
+CO_CHOICES = ["占い師", "霊媒師", "騎士", "人狼", "狂人"]       # COできる役職(人狼・狂人は偽COも可)
 WOLF_SIDE_CO = ("人狼", "狂人")                         # 人狼陣営の役職。COの前に確認する
 SURVEY_ROLES = {"市民", "霊媒師", "狂人"}               # 夜に「怪しい人アンケート」に答える役職
 
