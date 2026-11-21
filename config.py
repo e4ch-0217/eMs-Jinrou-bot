@@ -3,7 +3,7 @@
 HOPE_SECONDS = 30            # 希望役職の受付
 FIRST_NIGHT_SECONDS = 10     # 初日の夜(襲撃なし)
 NIGHT_SECONDS = 60           # 夜の行動(人狼の相談もこの間)
-RESULT_DELAY = 5             # 夜の結果が出てから夜明けまで
+RESULT_DELAY = 1             # 夜の結果が出てから夜明けまで
 MORNING_SECONDS = 5         # 朝の犠牲者の説明
 VICTIM_WILL_SECONDS = 10     # 襲撃された人の遺言(進行に関係ないことのみ)
 SILENT_SECONDS = 5           # 静かな人狼がいて遺言がないとき、朝の発表を読む間
