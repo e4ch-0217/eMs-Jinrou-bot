@@ -506,7 +506,7 @@ class Session(Handlers):
             title="☀️ おはようございます", description=desc, color=discord.Color.gold()))
         if victim is not None:
             if silenced:
-                await asyncio.sleep(C.SILENT_SECONDS)     # 遺言なしのとき、発表を読む間
+                await asyncio.sleep(C.MORNING_SECONDS)    # 遺言なしのとき、発表を読む間
             else:
                 await self.speak(victim, C.VICTIM_WILL_SECONDS, after="silent")
             await self.kill(victim)
