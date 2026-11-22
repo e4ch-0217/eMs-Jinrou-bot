@@ -283,6 +283,11 @@ class Session(Handlers):
                 self.wolf_channel = await self.guild.create_text_channel(
                     "人狼の巣", category=self.channel.category, overwrites=overwrites,
                     topic="人狼だけの相談部屋(夜だけ書き込めます)")
+                # できたことに気づけるよう、見られる人をメンションする
+                mentions = " ".join(m.mention for w in wolves if (m := self.member(w.user_id)))
+                if mentions:
+                    with contextlib.suppress(discord.HTTPException):
+                        await self.wolf_channel.send(f"🐺 **人狼の巣**ができました。{mentions}")
             done: set[int] = set()
             for uid, p in list(g.players.items()):
                 if p.role != "囁き共有者" or uid in done or uid not in g.partner:
