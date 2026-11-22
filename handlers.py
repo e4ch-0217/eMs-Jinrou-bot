@@ -46,6 +46,16 @@ class Handlers:
         if p.role == "強欲な人狼":
             text += "\n\n" + ("能力は使用済みです。" if p.greedy_used
                                 else "能力(1ゲーム1回): 夜の「夜の行動」から「能力を使う」を選ぶと、もう1人を襲撃できます。")
+        if p.role == "盟約者":
+            team_name = {"village": "村人陣営", "wolf": "人狼陣営"}
+            if p.pact_partner is None:
+                text += "\n\n盟約先: まだ選んでいません(初日の夜に、「夜の行動」から選べます)。"
+            else:
+                partner = g.players[p.pact_partner]
+                state = "" if partner.alive else "(死亡・次の夜に選び直します)"
+                text += (f"\n\n盟約先: **{partner.name}**{state}"
+                         f"\n盟約先の役職: **{ROLES[partner.role].name}**"
+                         f"\n今の陣営: **{team_name[g.team_of(p)]}**(盟約先の陣営で動きます)")
         for line in self.seer_results.get(uid, []):
             text += "\n\n" + line
         if uid in self.first_night_info:
@@ -105,7 +115,8 @@ class Handlers:
                 await deny(interaction, "すでに確定しています。")
                 return
             act = actors[uid]
-            title = {"attack": "襲撃する相手", "divine": "占う相手", "guard": "護衛する相手"}[act]
+            title = {"attack": "襲撃する相手", "divine": "占う相手", "guard": "護衛する相手",
+                     "pact": "盟約先"}[act]
             targets = [(t.user_id, t.name) for t in g.night_targets(uid, act)]
             if not targets:
                 await deny(interaction, "選べる相手がいません。")
@@ -121,6 +132,10 @@ class Handlers:
                     text = f"🔮 **{name}** を占います。結果は夜の終わりに表示されます。"
                 elif act == "guard":
                     text = f"🛡️ **{name}** を護衛します。"
+                elif act == "pact":
+                    role = ROLES[g.players[target].role].name
+                    text = (f"🤝 **{name}** を盟約先に選びました。\n"
+                            f"盟約先の役職は **{role}** です。今から、盟約先の陣営({'村人陣営' if g.team_of(g.players[uid]) == 'village' else '人狼陣営'})で動きます。")
                 else:
                     text = f"🐺 **{name}** を襲撃先に選びました。"
                 await i.response.edit_message(content=text + "\n(確定しました)", view=None)
@@ -130,6 +145,10 @@ class Handlers:
 
             await interaction.response.send_message(
                 f"{title}を選んでください。", view=PickView(targets, on_pick, title), ephemeral=True)
+            return
+
+        if self.in_first_night:
+            await deny(interaction, "初日の夜は、盟約者だけが行動できます。")
             return
 
         if p.role in SURVEY_ROLES and g.survey_roles_active():
@@ -410,7 +429,7 @@ class Handlers:
             return
         if role in WOLF_SIDE_CO:
             text = "⚠️ あなたは人狼陣営として、カミングアウトしようとしています。本当によろしいですか?"
-            if ROLES[p.role].team == "village":
+            if g.team_of(p) == "village":
                 text += "\n🚨 あなたは村人陣営です。人狼陣営の役職をCOすると、**偽CO**になります。"
             await interaction.response.send_message(
                 text, view=ConfirmCOView(self, p.user_id, role), ephemeral=True)

@@ -1,4 +1,4 @@
-"""追加役職(狂信者・囁き狂人・共有者・囁き共有者・大狼・猫又)のルールのテスト。 `python test_extra.py` で実行できます。"""
+"""追加役職(狂信者・囁き狂人・共有者・囁き共有者・大狼・猫又・盟約者など)のルールのテスト。 `python test_extra.py` で実行できます。"""
 import points
 from game import Game
 from roles import ATTACKERS, EXTRA_ROLES, ROLES, WOLF_CHAT_ROLES, parse_composition, validate_composition
@@ -21,7 +21,7 @@ def set_roles(g, roles):
 
 
 def test_extra_roles_defined():
-    assert set(EXTRA_ROLES) == {"狂信者", "囁き狂人", "共有者", "囁き共有者", "大狼", "静かな人狼", "強欲な人狼", "平和主義者", "猫又"}
+    assert set(EXTRA_ROLES) == {"狂信者", "囁き狂人", "共有者", "囁き共有者", "大狼", "静かな人狼", "強欲な人狼", "平和主義者", "猫又", "盟約者"}
     assert all(ROLES[r].extra for r in EXTRA_ROLES)
     assert ROLES["大狼"].team == "wolf" and ROLES["大狼"].seen_as == "人間"
     assert ROLES["狂信者"].team == "wolf" and ROLES["狂信者"].seen_as == "人間"

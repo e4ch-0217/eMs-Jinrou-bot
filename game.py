@@ -46,6 +46,8 @@ class Player:
     quit_early: bool = False  # 突然死したか(VCに戻らなかった)
     left: bool = False        # 自分から途中で抜けたか(報酬なし・参戦費は返さない)
     greedy_used: bool = False # 強欲な人狼: 能力を使ったか(1ゲーム1回)
+    pact_partner: int | None = None  # 盟約者: 盟約先
+    pact_team: str | None = None     # 盟約者: 盟約先の陣営(今の陣営)
 
 
 @dataclass
@@ -88,6 +90,7 @@ class Game:
         self.greedy_target: int | None = None      # 強欲な人狼の能力の対象(今夜)
         self.survey: dict[int, int] = {}           # 怪しい人アンケート: 回答者 -> 指名した人
         self.survey_notes: dict[int, str] = {}     # 狂人の一言: 回答者 -> 一言
+        self.new_pacts: list[int] = []             # 今夜、盟約を結んだ盟約者(チャンネル作成用)
 
         # COと報告
         self.co: dict[int, str] = {}                              # いまCOしている役職
@@ -235,10 +238,34 @@ class Game:
         self.survey = {}
         self.survey_notes = {}
 
+    def team_of(self, p: Player) -> str:
+        """今の陣営。盟約者は盟約先の陣営に従う(盟約がまだなら村人陣営)。"""
+        if p.role == "盟約者":
+            return p.pact_team or "village"
+        return ROLES[p.role].team
+
+    def pact_needed(self, p: Player) -> bool:
+        """盟約者が、今夜盟約先を選ぶ必要があるか(まだ選んでいない・盟約先が死んだ)。"""
+        return p.role == "盟約者" and (p.pact_partner is None or not self.players[p.pact_partner].alive)
+
+    def make_pact(self, user_id: int, target: int) -> None:
+        p = self.players[user_id]
+        p.pact_partner = target
+        p.pact_team = self.team_of(self.players[target])
+        self.new_pacts.append(user_id)
+
+    def first_night_actors(self) -> dict[int, str]:
+        """初日の夜に行動するのは、盟約者だけ。"""
+        return {p.user_id: "pact" for p in self.alive_players() if self.pact_needed(p)}
+
     def night_actors(self) -> dict[int, str]:
         """夜に行動する生存者 {user_id: 行動}。ワンナイトは占いだけ。"""
         actors = {}
         for p in self.alive_players():
+            if p.role == "盟約者":
+                if self.pact_needed(p):
+                    actors[p.user_id] = "pact"
+                continue
             act = ROLES[p.role].night_action
             if act is None or (self.one_night and act != "divine"):
                 continue
@@ -263,6 +290,9 @@ class Game:
         elif act == "guard":
             self.guard_actor = user_id
             self.guard_target = target
+        elif act == "pact":
+            self.make_pact(user_id, target)
+            return None
         elif act == "divine":
             result = ROLES[self.players[target].role].seen_as
             self.divine = (user_id, target, result)
@@ -404,7 +434,7 @@ class Game:
             return points.settle(results, payers, points.fee_for(True), points.table_for(True))
         results = []
         for p in self.players.values():
-            team = ROLES[p.role].team
+            team = self.team_of(p)
             results.append(points.Result(
                 uid=p.user_id, team=team, team_won=(team == winner), nights_survived=p.nights,
                 survived_to_end=p.alive and not p.quit_early, quit_early=p.quit_early,

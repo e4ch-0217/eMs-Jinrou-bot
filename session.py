@@ -69,6 +69,9 @@ class Session(Handlers):
         self.night_replies: dict[int, tuple[discord.Interaction, str]] = {}  # 夜の終わりに書き換える表示
         self.last_night = None
         self.first_night_info: dict[int, str] = {}
+        self.in_first_night = False                 # 初日の夜(行動するのは盟約者だけ)
+        self.pact_channels: dict[int, discord.TextChannel] = {}   # 盟約者ごとの2人だけの部屋
+        self.pact_members: dict[int, int] = {}      # 盟約者 -> いまの盟約先
         self.seer_results: dict[int, list[str]] = {}   # 占い師ごとの、夜の結果の記録(役職を確認で見られる)
         self.medium_text: str | None = None
 
@@ -402,14 +405,73 @@ class Session(Handlers):
                 if target:
                     self.first_night_info[p.user_id] = (
                         f"🔮 初日の占い: **{target.name}** は **{RESULT_LABEL['人間']}** です。")
+        actors = g.first_night_actors()             # 初日は、盟約者だけが盟約先を選ぶ
+        self.pending_night = set(actors)
+        self.in_first_night = True
+        self.night_event.clear()
         await self.apply_voice("night")
         await self.set_wolf_chat(True)
         await self.set_share_chat(True)
-        await self.channel.send(embed=discord.Embed(
-            title="🌙 恐ろしい夜がやってきました(初日)",
-            description="襲撃はありません。占い師には、ランダムな「人間」が1人伝えられます。",
-            color=discord.Color.dark_blue()))
-        await asyncio.sleep(C.FIRST_NIGHT_SECONDS)
+        if actors:
+            msg = await self.channel.send(embed=discord.Embed(
+                title="🌙 恐ろしい夜がやってきました(初日)",
+                description=("襲撃はありません。盟約者は、「夜の行動」から盟約先を選んでください。"
+                             "占い師には、ランダムな「人間」が1人伝えられます。"),
+                color=discord.Color.dark_blue()), view=NightView(self))
+            if not self.pending_night:
+                self.night_event.set()
+            await wait_event(self.night_event, C.NIGHT_SECONDS)
+            with contextlib.suppress(discord.HTTPException):
+                await msg.edit(view=None)
+            for uid in list(self.pending_night):    # 選ばなかった盟約者は、ランダム
+                targets = g.night_targets(uid, "pact")
+                if targets:
+                    g.record_night_action(uid, "pact", random.choice(targets).user_id)
+            self.pending_night.clear()
+            await self.setup_pact_channels()
+        else:
+            await self.channel.send(embed=discord.Embed(
+                title="🌙 恐ろしい夜がやってきました(初日)",
+                description="襲撃はありません。占い師には、ランダムな「人間」が1人伝えられます。",
+                color=discord.Color.dark_blue()))
+            await asyncio.sleep(C.FIRST_NIGHT_SECONDS)
+        self.in_first_night = False
+
+    async def setup_pact_channels(self) -> None:
+        """今夜結ばれた盟約ごとに、盟約者と盟約先だけの部屋を作る。盟約先が変わったら、部屋の相手を付け替える。"""
+        g = self.game
+        pacts, g.new_pacts = list(g.new_pacts), []
+        hidden = {
+            self.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            self.guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        }
+        for uid in pacts:
+            partner = g.players[uid].pact_partner
+            me, other = self.member(uid), self.member(partner)
+            old = self.pact_members.get(uid)
+            channel = self.pact_channels.get(uid)
+            try:
+                if channel is None:
+                    overwrites = dict(hidden)
+                    for m in (me, other):
+                        if m:
+                            overwrites[m] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+                    channel = await self.guild.create_text_channel(
+                        f"盟約の部屋{len(self.pact_channels) + 1}", category=self.channel.category,
+                        overwrites=overwrites, topic="盟約者と盟約先の2人だけの部屋")
+                    self.pact_channels[uid] = channel
+                    text = "🤝 盟約の部屋です。この部屋は、盟約者と盟約先の2人だけが見られます。"
+                else:
+                    if old is not None and old != partner and self.member(old):
+                        await channel.set_permissions(self.member(old), overwrite=None)
+                    if other:
+                        await channel.set_permissions(other, view_channel=True, send_messages=True)
+                    text = "🤝 盟約先が変わりました。この部屋は、盟約者と新しい盟約先の2人だけが見られます。"
+            except discord.HTTPException:
+                continue
+            self.pact_members[uid] = partner
+            with contextlib.suppress(discord.HTTPException):
+                await channel.send(text)
 
     async def night(self) -> None:
         g = self.game
@@ -443,6 +505,7 @@ class Session(Handlers):
                     self.seer_results.setdefault(uid, []).append(
                         f"🔮 時間切れのため、**{g.players[t].name}** を占いました。結果: **{RESULT_LABEL[r]}**")
         self.pending_night.clear()
+        await self.setup_pact_channels()
 
         res = g.resolve_night()
         g.apply_night(res)
@@ -959,7 +1022,7 @@ class Session(Handlers):
                               color=discord.Color.green())
         lines = [f"・{g.players[u].name}{'' if u in self.payers else '(免除)'}"
                  f"{'(突然死)' if g.players[u].quit_early else ''}{'(退出)' if g.players[u].left else ''}"
-                 f"{'(追加役職×' + str(points.EXTRA_ROLE_WIN_MULT) + ')' if ROLES[g.players[u].role].extra and not g.one_night and ROLES[g.players[u].role].team == winner else ''}"
+                 f"{'(追加役職×' + str(points.EXTRA_ROLE_WIN_MULT) + ')' if ROLES[g.players[u].role].extra and not g.one_night and g.team_of(g.players[u]) == winner else ''}"
                  f": +{a}pt" for u, a in s.final.items()]
         embed.add_field(name=f"💰 ポイント(還元率 {round(s.ratio * 100)}%)",
                         value="\n".join(lines)[:1000], inline=False)
@@ -989,7 +1052,7 @@ class Session(Handlers):
             if m:
                 with contextlib.suppress(discord.HTTPException):
                     await self.channel.set_permissions(m, overwrite=None)
-        channels = [c for c in (self.game_channel, self.wolf_channel, self.heaven) if c] + [c for c, _ in self.share_channels]
+        channels = [c for c in (self.game_channel, self.wolf_channel, self.heaven) if c] + [c for c, _ in self.share_channels] + list(self.pact_channels.values())
         for c in channels:
             with contextlib.suppress(discord.HTTPException):
                 await c.send(f"このチャンネルは{C.CLEANUP_SECONDS}秒後に削除されます。")
