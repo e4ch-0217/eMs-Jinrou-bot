@@ -44,6 +44,8 @@ class Store:
         return len(rows)
 
     def balance(self, guild_id: int, user_id: int) -> int:
+        if user_id < 0:                          # テスト用の人は、ポイントを保存しない
+            return START_POINTS
         with self._lock:
             row = self.conn.execute(
                 "SELECT balance FROM balances WHERE guild_id=? AND user_id=?", (guild_id, user_id)).fetchone()
@@ -57,6 +59,8 @@ class Store:
 
     def add(self, guild_id: int, user_id: int, delta: int) -> int:
         """残高を増減して、新しい残高を返す。"""
+        if user_id < 0:
+            return START_POINTS
         new = self.balance(guild_id, user_id) + delta
         with self._lock:
             self.conn.execute(

@@ -83,12 +83,12 @@ class HopeView(discord.ui.View):
 
     @discord.ui.button(label="希望を出す", style=discord.ButtonStyle.primary, emoji="🎲")
     async def hope(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.session.is_player(interaction.user.id):
+        if not self.session.is_player(self.session.actor(interaction.user.id)):
             await interaction.response.send_message("参加者だけが選べます。", ephemeral=True)
             return
         await interaction.response.send_message(
             "第1・第2希望を選んで「決定」を押してください。",
-            view=RoleSelectView(self.session, interaction.user.id), ephemeral=True)
+            view=RoleSelectView(self.session, self.session.actor(interaction.user.id)), ephemeral=True)
 
 
 class GameView(discord.ui.View):
@@ -163,7 +163,7 @@ class CloseNowView(discord.ui.View):
 
     @discord.ui.button(label="今すぐ閉じる", style=discord.ButtonStyle.secondary, emoji="🧹")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.session.can_close_now(interaction.user.id):
+        if not self.session.can_close_now(self.session.actor(interaction.user.id)):
             await interaction.response.send_message("主催者だけが押せます。", ephemeral=True)
             return
         self.session.close_now.set()
@@ -179,7 +179,7 @@ class ConfirmCOView(discord.ui.View):
 
     @discord.ui.button(label="はい、COする", style=discord.ButtonStyle.danger)
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.uid:
+        if self.session.actor(interaction.user.id) != self.uid:
             await interaction.response.send_message("この確認は、COした本人だけが押せます。", ephemeral=True)
             return
         if await self.handlers.commit_co(interaction, self.role):
@@ -283,7 +283,7 @@ class SpeakEndView(discord.ui.View):
 
     @discord.ui.button(label="意見終了", style=discord.ButtonStyle.primary, emoji="🎤")
     async def end(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.speaker:
+        if self.session.actor(interaction.user.id) != self.speaker:
             await interaction.response.send_message("いまは話している人だけが押せます。", ephemeral=True)
             return
         self.session.speak_end.set()
@@ -309,7 +309,7 @@ class ConfirmGreedyView(discord.ui.View):
 
     @discord.ui.button(label="はい、能力を使う", style=discord.ButtonStyle.danger)
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.uid:
+        if self.session.actor(interaction.user.id) != self.uid:
             await interaction.response.send_message("この確認は、本人だけが押せます。", ephemeral=True)
             return
         await self.session.commit_greedy(interaction, self.uid, self.target)
@@ -426,6 +426,49 @@ class SettingView(discord.ui.View):
             return
         self.session.game.custom_composition = None
         await self._refresh(interaction, "役職構成を自動(人数に合わせる)に戻しました。")
+
+
+# ---------- テスト用(管理者が、テストの人として操作する) ----------
+
+def panel_text(session, admin_id: int) -> str:
+    uid = session.actor(admin_id)
+    name = session.game.players[uid].name if uid in session.game.players else "(いません)"
+    return f"🧪 今は **{name}** として操作しています。(ボタンは、この人の立場で押されます)"
+
+
+class TestPanelView(discord.ui.View):
+    """管理者だけが使う。「操作する人」を、参加者(テストの人を含む)から選ぶ。"""
+
+    def __init__(self, session, admin_id: int):
+        super().__init__(timeout=600)
+        self.session = session
+        self.admin_id = admin_id
+        current = session.actor(admin_id)
+        options = [discord.SelectOption(label=(p.name + ("(テスト)" if uid < 0 else ""))[:100],
+                                        value=str(uid), default=(uid == current))
+                   for uid, p in list(session.game.players.items())[:25]]
+        select = discord.ui.Select(placeholder="操作する人を選ぶ", options=options)
+
+        async def on_select(interaction: discord.Interaction):
+            uid = int(select.values[0])
+            if uid == self.admin_id:
+                session.acting.pop(admin_id, None)
+            else:
+                session.acting[admin_id] = uid
+            await interaction.response.edit_message(content=panel_text(session, admin_id),
+                                                    view=TestPanelView(session, admin_id))
+
+        select.callback = on_select
+        self.add_item(select)
+        back = discord.ui.Button(label="自分に戻す", style=discord.ButtonStyle.secondary)
+
+        async def on_back(interaction: discord.Interaction):
+            session.acting.pop(admin_id, None)
+            await interaction.response.edit_message(content=panel_text(session, admin_id),
+                                                    view=TestPanelView(session, admin_id))
+
+        back.callback = on_back
+        self.add_item(back)
 
 
 class CompositionModal(discord.ui.Modal, title="役職構成"):

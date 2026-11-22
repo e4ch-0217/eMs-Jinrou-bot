@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from game import Game, Mode
 from roles import composition_text, composition_total, parse_composition
 from session import Session
-from views import OptionsView, options_text
+from views import OptionsView, TestPanelView, options_text, panel_text
 from store import Store
 
 load_dotenv()
@@ -207,6 +207,46 @@ async def options_command(interaction: discord.Interaction):
     await interaction.response.send_message(
         options_text(s.game) + "\n\n見る・変えるを、下のボタンから選んでください。",
         view=OptionsView(s), ephemeral=True)
+
+
+jinro_test = app_commands.Group(name="test", description="テスト用(サーバー管理者だけ)", guild_only=True)
+
+
+@jinro_test.command(name="add", description="テスト用の参加者を追加します(募集中・サーバー管理者だけ)")
+@app_commands.describe(name="名前(例: テストA)")
+async def test_add(interaction: discord.Interaction, name: str):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message("サーバー管理者だけが使えます。", ephemeral=True)
+        return
+    s = client.games.get(interaction.guild_id)
+    if not s or s.started:
+        await interaction.response.send_message("参加者募集中のゲームがありません。", ephemeral=True)
+        return
+    uid = min([0] + list(s.game.players.keys())) - 1      # 負のIDで、本物のユーザーと重ならない
+    name = (name.strip() or "テスト")[:20]
+    if not s.game.add_player(uid, name):
+        await interaction.response.send_message("これ以上参加できません。", ephemeral=True)
+        return
+    await interaction.response.send_message(f"🧪 テスト用の参加者 **{name}** を追加しました。", ephemeral=True)
+    if s.lobby_message:
+        with contextlib.suppress(discord.HTTPException):
+            await s.lobby_message.edit(embed=s.lobby_embed())
+
+
+@jinro_test.command(name="as", description="テスト用: 今どの人として操作するかを選びます(サーバー管理者だけ)")
+async def test_as(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message("サーバー管理者だけが使えます。", ephemeral=True)
+        return
+    s = client.games.get(interaction.guild_id)
+    if not s:
+        await interaction.response.send_message("ゲームがありません。", ephemeral=True)
+        return
+    await interaction.response.send_message(panel_text(s, interaction.user.id),
+                                            view=TestPanelView(s, interaction.user.id), ephemeral=True)
+
+
+jinro.add_command(jinro_test)
 
 
 @jinro.command(name="stop", description="ゲームを中止します(主催者・サーバー管理者のみ)")

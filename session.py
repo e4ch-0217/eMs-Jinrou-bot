@@ -72,6 +72,7 @@ class Session(Handlers):
         self.in_first_night = False                 # 初日の夜(行動するのは盟約者だけ)
         self.pact_channels: dict[int, discord.TextChannel] = {}   # 盟約者ごとの2人だけの部屋
         self.pact_members: dict[int, int] = {}      # 盟約者 -> いまの盟約先
+        self.acting: dict[int, int] = {}            # テスト用: 管理者 -> 今その人として操作している人
         self.seer_results: dict[int, list[str]] = {}   # 占い師ごとの、夜の結果の記録(役職を確認で見られる)
         self.medium_text: str | None = None
 
@@ -94,6 +95,14 @@ class Session(Handlers):
 
     def member(self, uid: int) -> discord.Member | None:
         return self.guild.get_member(uid)
+
+    def present(self, uid: int) -> bool:
+        """テスト用の人(IDが負の数)は、いつも参加中として扱う。"""
+        return uid < 0 or self.in_vc(self.member(uid))
+
+    def actor(self, user_id: int) -> int:
+        """ボタンを押した人が、今どの人として操作しているか(テスト用。ふつうは本人)。"""
+        return self.acting.get(user_id, user_id)
 
     def in_vc(self, m: discord.Member | None) -> bool:
         return bool(m and m.voice and m.voice.channel and m.voice.channel.id == self.vc.id)
@@ -217,7 +226,7 @@ class Session(Handlers):
         g = self.game
         if self.started:
             return
-        absent = [p.name for p in g.players.values() if not self.in_vc(self.member(p.user_id))]
+        absent = [p.name for p in g.players.values() if not self.present(p.user_id)]
         if absent:
             await interaction.followup.send(
                 "⚠️ 次の人がゲームVCに入っていません: " + "、".join(absent), ephemeral=True)
@@ -259,7 +268,7 @@ class Session(Handlers):
                 "人狼-進行", category=origin.category, overwrites=overwrites,
                 topic="ゲームの進行(自動で流れます)")
             self.channel = self.game_channel
-            mentions = " ".join(f"<@{uid}>" for uid in self.game.players)
+            mentions = " ".join(f"<@{uid}>" if uid > 0 else p.name for uid, p in self.game.players.items())
             await origin.send(f"{mentions}\n🐺 ゲームの進行は {self.game_channel.mention} で行います。そちらを見てください。",
                               )
         except discord.HTTPException:
@@ -607,7 +616,7 @@ class Session(Handlers):
         victims = list(res.victims) if res else []
         # 次の朝までVCに戻らなかった人(襲撃された人は除く)
         gone = [uid for uid in list(self.absent) if uid not in victims
-                and g.players[uid].alive and not self.in_vc(self.member(uid))]
+                and g.players[uid].alive and not self.present(uid)]
         silenced = bool(victims) and any(x.role == "静かな人狼" and x.alive for x in g.players.values())
         names = "、".join(f"**{g.players[v].name}**" for v in victims)
         if victims and silenced:
@@ -855,7 +864,7 @@ class Session(Handlers):
     async def sweep_absent(self) -> None:
         """役職が配られた時点で、VCにいない人を、抜けた人として扱う。"""
         for uid, p in list(self.game.players.items()):
-            if p.alive and not self.in_vc(self.member(uid)):
+            if p.alive and not self.present(uid):
                 if self.game.one_night:
                     await self.quit_now(uid)
                 else:
@@ -863,7 +872,7 @@ class Session(Handlers):
 
     async def quit_now(self, uid: int) -> None:
         p = self.game.players[uid]
-        if not p.alive or self.finished or self.in_vc(self.member(uid)):
+        if not p.alive or self.finished or self.present(uid):
             return
         self.game.mark_quit(uid)
         self.absent.pop(uid, None)

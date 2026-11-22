@@ -65,22 +65,22 @@ class Handlers:
         return text
 
     async def show_role(self, interaction: discord.Interaction) -> None:
-        if not self.started or not self.is_player(interaction.user.id):
+        if not self.started or not self.is_player(self.actor(interaction.user.id)):
             await deny(interaction, "参加者だけが見られます。")
             return
-        await deny(interaction, self.role_text(interaction.user.id))
+        await deny(interaction, self.role_text(self.actor(interaction.user.id)))
 
     async def request_leave(self, interaction: discord.Interaction) -> None:
-        p = self.game.players.get(interaction.user.id)
+        p = self.game.players.get(self.actor(interaction.user.id))
         if not self.started or self.finished or p is None or p.left or p.quit_early:
             await deny(interaction, "ゲームに参加していません。")
             return
         await interaction.response.send_message(
             "ゲームから抜けると、**報酬はなし・参戦費も返しません**。本当に抜けますか?",
-            view=ConfirmLeaveView(self, interaction.user.id), ephemeral=True)
+            view=ConfirmLeaveView(self, self.actor(interaction.user.id)), ephemeral=True)
 
     async def join_spectators(self, interaction: discord.Interaction) -> None:
-        p = self.game.players.get(interaction.user.id)
+        p = self.game.players.get(self.actor(interaction.user.id))
         if p and p.alive and not self.finished:        # 終わったあとは、生存者も観戦できる
             await deny(interaction, "生存中の参加者は観戦できません。")
             return
@@ -94,7 +94,7 @@ class Handlers:
     # ---------- 夜 ----------
     async def night_menu(self, interaction: discord.Interaction) -> None:
         g = self.game
-        uid = interaction.user.id
+        uid = self.actor(interaction.user.id)
         p = g.players.get(uid)
         if p is None or not p.alive:
             await deny(interaction, "生存している参加者だけが選べます。")
@@ -191,7 +191,7 @@ class Handlers:
 
     async def note_night_menu(self, interaction: discord.Interaction) -> None:
         g, note = self.game, self.game.note
-        uid = interaction.user.id
+        uid = self.actor(interaction.user.id)
         p = g.players[uid]
         if p.role == "人狼":
             mates = [g.players[u].name for u in note.wolf_partners(uid)]
@@ -234,7 +234,7 @@ class Handlers:
     async def greedy_menu(self, interaction: discord.Interaction) -> None:
         """強欲な人狼の夜の行動: 通常の襲撃先(多数決に入る)と、能力(もう1人を襲撃・1ゲーム1回)。"""
         g = self.game
-        uid = interaction.user.id
+        uid = self.actor(interaction.user.id)
         p = g.players[uid]
         options: list[tuple[int, str]] = []
         if uid in self.pending_night:
@@ -287,7 +287,7 @@ class Handlers:
 
     async def note_open_vote(self, interaction: discord.Interaction) -> None:
         g, note = self.game, self.game.note
-        uid = interaction.user.id
+        uid = self.actor(interaction.user.id)
         p = g.players.get(uid)
         if p is None or not p.alive or g.phase != Phase.VOTE:
             await deny(interaction, "いまは投票できません。")
@@ -316,7 +316,7 @@ class Handlers:
     # ---------- 昼 ----------
     def _alive_in_phase(self, interaction: discord.Interaction, phase: Phase) -> str | None:
         """使えない理由があれば返す。"""
-        p = self.game.players.get(interaction.user.id)
+        p = self.game.players.get(self.actor(interaction.user.id))
         if p is None or not p.alive:
             return "生存している参加者だけが使えます。"
         if self.game.phase != phase:
@@ -328,7 +328,7 @@ class Handlers:
         if reason:
             await deny(interaction, reason)
             return
-        uid = interaction.user.id
+        uid = self.actor(interaction.user.id)
         if uid in self.skip_votes:
             await deny(interaction, "すでに希望しています。")
             return
@@ -348,7 +348,7 @@ class Handlers:
         if self.ext_used >= EXTEND_MAX:
             await deny(interaction, f"延長は1試合{EXTEND_MAX}回までです。")
             return
-        uid = interaction.user.id
+        uid = self.actor(interaction.user.id)
         if uid in self.ext_votes:
             await deny(interaction, "すでに希望しています。")
             return
@@ -367,7 +367,7 @@ class Handlers:
         if reason:
             await deny(interaction, reason)
             return
-        uid = interaction.user.id
+        uid = self.actor(interaction.user.id)
         if uid in self.votes or uid in self.jump_queue:
             await deny(interaction, "すでに投票したか、予約しています。")
             return
@@ -375,7 +375,7 @@ class Handlers:
         await deny(interaction, f"予約しました(割り込み {len(self.jump_queue)}番目)。")
 
     async def open_vote_menu(self, interaction: discord.Interaction, voter: int) -> None:
-        if interaction.user.id != voter:
+        if self.actor(interaction.user.id) != voter:
             await deny(interaction, "あなたの番ではありません。")
             return
         if voter in self.votes:
@@ -399,7 +399,7 @@ class Handlers:
 
     async def open_tie_menu(self, interaction: discord.Interaction) -> None:
         g = self.game
-        uid = interaction.user.id
+        uid = self.actor(interaction.user.id)
         p = g.players.get(uid)
         if p is None or not p.alive:
             await deny(interaction, "生存している参加者だけが投票できます。")
@@ -419,7 +419,7 @@ class Handlers:
     # ---------- CO と報告 ----------
     async def handle_co(self, interaction: discord.Interaction, role: str) -> None:
         g = self.game
-        p = g.players.get(interaction.user.id)
+        p = g.players.get(self.actor(interaction.user.id))
         if p is None or not p.alive:
             await deny(interaction, "生存している参加者だけがCOできます。")
             return
@@ -447,7 +447,7 @@ class Handlers:
     async def commit_co(self, interaction: discord.Interaction, role: str) -> bool:
         """COを記録して、全員に知らせる。失敗したときは、ここで返事をして False を返す。"""
         g = self.game
-        p = g.players.get(interaction.user.id)
+        p = g.players.get(self.actor(interaction.user.id))
         if p is None or not p.alive or g.phase not in (Phase.DAY, Phase.VOTE):
             await deny(interaction, "今はCOできません。")
             return False
@@ -459,7 +459,7 @@ class Handlers:
 
     async def open_report_menu(self, interaction: discord.Interaction) -> None:
         g = self.game
-        uid = interaction.user.id
+        uid = self.actor(interaction.user.id)
         p = g.players.get(uid)
         if p is None or not p.alive:
             await deny(interaction, "生存している参加者だけが報告できます。")
