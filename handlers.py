@@ -8,7 +8,7 @@ import discord
 import config as C
 import note_rules as NR
 from game import PEACE_VOTE, RESULT_LABEL, Mode, Phase
-from roles import ATTACKERS, ROLES, SURVEY_ROLES, WOLF_CHAT_ROLES, WOLF_SIDE_CO
+from roles import ATTACKERS, NOTE_ONLY_ROLES, ROLES, SURVEY_ROLES, WOLF_CHAT_ROLES, WOLF_SIDE_CO
 from views import ConfirmCOView, ConfirmLeaveView, NoteModal, PickView, ResultView
 
 
@@ -127,7 +127,7 @@ class Handlers:
             return
 
         if p.role in SURVEY_ROLES and g.survey_roles_active():
-            question = ("誰が一番人狼だと思いますか?" if p.role == "狂人" else "誰が怪しく見えますか?")
+            question = ("誰が一番人狼に見えますか?" if p.role == "狂人" else "誰が怪しく見えますか?")
 
             async def on_survey(i: discord.Interaction, target: int) -> None:
                 name = g.players[target].name
@@ -147,6 +147,15 @@ class Handlers:
 
             await interaction.response.send_message(
                 question, view=PickView(self.survey_targets(uid), on_survey, "選んでください"), ephemeral=True)
+            return
+
+        if p.role in NOTE_ONLY_ROLES and g.survey_roles_active():
+            async def on_only_note(mi: discord.Interaction, note: str) -> None:
+                if note.strip():
+                    g.survey_notes[uid] = note.strip()[:100]
+                await mi.response.send_message("一言を受け付けました(天国に送られます)。", ephemeral=True)
+
+            await interaction.response.send_modal(NoteModal(on_only_note))
             return
 
         await deny(interaction, "今夜は、あなたにできる行動はありません。")

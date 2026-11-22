@@ -62,7 +62,8 @@ WOLF_CHAT_ROLES = ("人狼", "大狼", "静かな人狼", "囁き狂人")       
 EXTRA_ROLES = tuple(r.name for r in ROLE_LIST if r.extra)
 CO_CHOICES = ["占い師", "霊媒師", "騎士", "人狼", "狂人"]       # COできる役職(人狼・狂人は偽COも可)
 WOLF_SIDE_CO = ("人狼", "狂人")                         # 人狼陣営の役職。COの前に確認する
-SURVEY_ROLES = {"市民", "霊媒師", "狂人"}               # 夜に「怪しい人アンケート」に答える役職
+SURVEY_ROLES = {"市民", "霊媒師", "狂人", "共有者", "囁き共有者", "猫又", "平和主義者"}   # 夜に「怪しい人アンケート」に答える役職
+NOTE_ONLY_ROLES = ("狂信者", "囁き狂人")               # 夜に一言だけ書ける(天国に出る。アンケートなし)
 
 
 def default_composition(n: int, one_night: bool) -> dict[str, int]:

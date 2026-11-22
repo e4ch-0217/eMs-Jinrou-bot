@@ -419,7 +419,7 @@ class Session(Handlers):
         await self.set_share_chat(True)
         msg = await self.channel.send(embed=discord.Embed(
             title=f"🌙 恐ろしい夜がやってきました({g.day}日目・{C.NIGHT_SECONDS}秒)",
-            description=("行動する人は「夜の行動」を押してください(市民・霊媒師・狂人は、怪しい人アンケートです)。\n"
+            description=("行動する人は「夜の行動」を押してください(白の役職と狂人は、怪しい人アンケートです。狂信者・囁き狂人は、一言を書けます)。\n"
                          "全員が確定すると、すぐに結果が出ます。人狼は「人狼の巣」で相談できます。"),
             color=discord.Color.dark_blue()), view=NightView(self))
         if not self.pending_night:
