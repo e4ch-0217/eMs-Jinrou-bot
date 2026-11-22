@@ -502,6 +502,9 @@ class Session(Handlers):
                     f"({C.VICTIM_WILL_SECONDS}秒、進行に関係ないことだけ話せます)")
         else:
             desc = "昨夜は誰も犠牲になりませんでした。"
+        nekomata_target = self.pick_nekomata_target(victim, "attack") if victim is not None else None
+        if nekomata_target is not None:      # 襲撃の道連れは、この朝の発表に一緒に出す
+            desc += f"\n🐱 猫又の道連れで、**{g.players[nekomata_target].name}** も死亡しました。"
         if gone:
             desc += "\n\n🔌 次の朝までVCに戻らなかったため、**突然死**になりました: " + \
                     "、".join(g.players[u].name for u in gone)
@@ -513,12 +516,14 @@ class Session(Handlers):
             else:
                 await self.speak(victim, C.VICTIM_WILL_SECONDS, after="silent")
             await self.kill(victim)
-            await self.nekomata_follow(victim, "attack")
+            await self.nekomata_follow(victim, nekomata_target)
         else:
             await asyncio.sleep(C.MORNING_SECONDS)
         for uid in gone:
             nights = self.absent.pop(uid, None)
             p = g.players[uid]
+            if not p.alive:                               # 道連れで、すでに死んでいる
+                continue
             if nights is not None:
                 p.nights = nights                         # 抜けた夜より後は数えない
             g.mark_quit(uid)
@@ -670,30 +675,35 @@ class Session(Handlers):
             f"{g.players[c].name} {counts.get(c, 0)}票" for c in leaders))
         return new_leaders
 
-    async def nekomata_follow(self, uid: int, cause: str) -> None:
-        """猫又の道連れ。襲撃されたら人狼(大狼を含む)を1人、処刑されたら生存者を1人、ランダムで道連れにする。"""
+    def pick_nekomata_target(self, uid: int, cause: str) -> int | None:
+        """猫又の道連れ先を、ランダムに1人決める。猫又でない・道連れ先がいないなら None。"""
         g = self.game
-        p = g.players[uid]
-        if p.role != "猫又":
-            return
+        p = g.players.get(uid)
+        if p is None or p.role != "猫又":
+            return None
         if cause == "attack":
             pool = [x.user_id for x in g.alive_players() if x.role in ATTACKERS]
         else:
             pool = [x.user_id for x in g.alive_players() if x.user_id != uid]
-        if not pool:
+        return random.choice(pool) if pool else None
+
+    async def nekomata_follow(self, uid: int, target: int | None) -> None:
+        """道連れを実行する(死亡・天国のログ)。みんなに見える発表は、呼び出し側で出す。"""
+        if target is None:
             return
-        target = random.choice(pool)
-        await self.channel.send(
-            f"🐱 猫又 **{p.name}** の道連れで、**{g.players[target].name}** も死亡しました。")
+        g = self.game
         await self.kill(target)
-        await self.to_heaven(f"🐱 猫又 {p.name} の道連れ: {g.players[target].name}({g.players[target].role})")
+        await self.to_heaven(f"🐱 猫又 {g.players[uid].name} の道連れ: {g.players[target].name}({g.players[target].role})")
 
     async def executed_will(self, uid: int) -> None:
         g = self.game
         await self.speak(uid, C.EXECUTED_WILL_SECONDS)
         g.record_execution(uid)
         await self.kill(uid)
-        await self.nekomata_follow(uid, "execute")
+        target = self.pick_nekomata_target(uid, "execute")
+        if target is not None:
+            await self.channel.send(f"🐱 猫又 **{g.players[uid].name}** の道連れで、**{g.players[target].name}** も死亡しました。")
+        await self.nekomata_follow(uid, target)
         label = RESULT_LABEL[ROLES[g.players[uid].role].seen_as]
         self.medium_text = f"👻 処刑された **{g.players[uid].name}** は **{label}** でした。"
         await self.to_heaven(f"⚖️ 処刑: {g.players[uid].name}({g.players[uid].role})")
