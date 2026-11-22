@@ -6,7 +6,7 @@ import contextlib
 import discord
 
 from config import HOPE_SECONDS, NIGHT_SECONDS
-from roles import CO_CHOICES, ROLE_LIST, composition_text, parse_composition
+from roles import CO_CHOICES, ROLE_LIST, composition_text, composition_total, parse_composition
 
 
 class PickView(discord.ui.View):
@@ -447,5 +447,6 @@ class CompositionModal(discord.ui.Modal, title="役職構成"):
         self.session.game.custom_composition = comp
         await interaction.response.send_message(
             "役職構成を設定しました: " + composition_text(comp)
-            + "\n※合計が参加人数と合わない場合は開始できません。", ephemeral=True)
+            + f"\n合計 **{composition_total(comp)}人**(今の参加人数は{len(self.session.game.players)}人)。"
+            + "合計が参加人数と合わない場合は開始できません。", ephemeral=True)
         await refresh_lobby(self.session)

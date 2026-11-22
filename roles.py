@@ -95,6 +95,10 @@ def composition_text(comp: dict[str, int]) -> str:
     return " / ".join(f"{ROLES[r].emoji}{r}×{comp[r]}" for r in ROLE_ORDER if comp.get(r))
 
 
+def composition_total(comp: dict[str, int]) -> int:
+    return sum(comp.values())
+
+
 def parse_composition(text: str) -> dict[str, int]:
     """「人狼2 占い師1 騎士1 市民3」のような文字列を役職構成に変換する。"""
     pairs = re.findall(r"([^\s\d:：=＝×x,、]+)\s*[:：=＝×x]?\s*(\d+)", text)

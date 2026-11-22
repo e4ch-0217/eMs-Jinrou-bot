@@ -10,7 +10,7 @@ from discord import app_commands
 from dotenv import load_dotenv
 
 from game import Game, Mode
-from roles import composition_text, parse_composition
+from roles import composition_text, composition_total, parse_composition
 from session import Session
 from views import OptionsView, options_text
 from store import Store
@@ -191,7 +191,8 @@ async def roles_command(interaction: discord.Interaction, setting: str = ""):
             return
         await interaction.response.send_message(
             "役職構成を設定しました: " + composition_text(s.game.custom_composition)
-            + "\n※合計が参加人数と合わない場合は開始できません。")
+            + f"\n合計 **{composition_total(s.game.custom_composition)}人**(今の参加人数は{len(s.game.players)}人)。"
+            + "合計が参加人数と合わない場合は開始できません。")
     if s.lobby_message:
         with contextlib.suppress(discord.HTTPException):
             await s.lobby_message.edit(embed=s.lobby_embed())
