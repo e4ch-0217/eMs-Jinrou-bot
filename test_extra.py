@@ -1,4 +1,4 @@
-"""追加役職(狂信者・囁き狂人・共有者・囁き共有者・大狼・猫又・盟約者など)のルールのテスト。 `python test_extra.py` で実行できます。"""
+"""拡張役職(狂信者・囁き狂人・共有者・囁き共有者・大狼・猫又・盟約者など)のルールのテスト。 `python test_extra.py` で実行できます。"""
 import points
 from game import Game
 from roles import ATTACKERS, EXTRA_ROLES, ROLES, WOLF_CHAT_ROLES, parse_composition, validate_composition
@@ -117,7 +117,7 @@ def test_settlement_applies_multiplier_only_to_extra_roles():
     g = make_game({"人狼": 1, "大狼": 1, "猫又": 1, "市民": 5})
     set_roles(g, {0: "人狼", 1: "大狼", 2: "猫又", **{i: "市民" for i in range(3, 8)}})
     s = g.settlement("village", set(range(8)))
-    # 猫又(追加役職・村人陣営)は、市民より多く受け取る(勝利報酬が1.5倍。生還20ptと上限の調整は別)
+    # 猫又(拡張役職・村人陣営)は、市民より多く受け取る(勝利報酬が1.5倍。生還20ptと上限の調整は別)
     assert s.final[2] > s.final[3] > 0
     assert s.final[3] == s.final[4] == s.final[5]                 # 市民どうしは同じ
 

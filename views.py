@@ -1,10 +1,12 @@
 """Discord のボタン・メニュー。処理の中身は Session のメソッドに任せ、ここは受け口だけ。"""
 from __future__ import annotations
 
+import contextlib
+
 import discord
 
 from config import HOPE_SECONDS, NIGHT_SECONDS
-from roles import CO_CHOICES, ROLE_LIST
+from roles import CO_CHOICES, ROLE_LIST, composition_text, parse_composition
 
 
 class PickView(discord.ui.View):
@@ -315,3 +317,135 @@ class ConfirmGreedyView(discord.ui.View):
     @discord.ui.button(label="やめる", style=discord.ButtonStyle.secondary)
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="能力は使いませんでした。", view=None)
+
+
+# ---------- /jinro options(ゲームの設定) ----------
+
+def options_text(game) -> str:
+    comp = game.composition_label() if game.custom_composition else "自動(人数に合わせる)"
+    guard = "許可" if game.allow_consecutive_guard else "禁止(前の夜に守った人は、次の夜に選べません)"
+    divine = "占う相手を選ぶ" if game.first_night_divine == "choose" else "ランダムな「人間」を1人伝える"
+    return ("⚙️ **現在の設定**(このゲームだけに有効)\n"
+            f"・連続ガード: {guard}\n"
+            f"・初日の占い: {divine}\n"
+            f"・役職構成: {comp}\n"
+            f"・モード: {game.preview_mode().value}")
+
+
+async def refresh_lobby(session) -> None:
+    if session.lobby_message:
+        with contextlib.suppress(discord.HTTPException):
+            await session.lobby_message.edit(embed=session.lobby_embed())
+
+
+class OptionsView(discord.ui.View):
+    """/jinro options の最初の画面: 見る か 変える。"""
+
+    def __init__(self, session):
+        super().__init__(timeout=300)
+        self.session = session
+
+    @discord.ui.button(label="今の設定を見る", style=discord.ButtonStyle.secondary, emoji="👀")
+    async def show(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(options_text(self.session.game), ephemeral=True)
+
+    @discord.ui.button(label="設定を変える(主催者)", style=discord.ButtonStyle.primary, emoji="🛠️")
+    async def change(self, interaction: discord.Interaction, button: discord.ui.Button):
+        s = self.session
+        if s.started:
+            await interaction.response.send_message("設定を変えられるのは、募集中だけです。", ephemeral=True)
+            return
+        if interaction.user.id != s.game.host_id:
+            await interaction.response.send_message("主催者だけが変更できます。", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            options_text(s.game) + "\n\n変えたい項目のボタンを押してください。",
+            view=SettingView(s), ephemeral=True)
+
+
+class SettingView(discord.ui.View):
+    """設定を変える画面。押すたびに、その場で切り替わる。"""
+
+    def __init__(self, session):
+        super().__init__(timeout=300)
+        self.session = session
+        g = session.game
+        guard = self.guard_button = discord.ui.Button(
+            label=f"連続ガード: {'許可' if g.allow_consecutive_guard else '禁止'}を切り替え",
+            style=discord.ButtonStyle.secondary)
+        guard.callback = self._toggle_guard
+        self.add_item(guard)
+        divine = discord.ui.Button(
+            label=f"初日の占い: {'選ぶ' if g.first_night_divine == 'choose' else 'ランダム'}を切り替え",
+            style=discord.ButtonStyle.secondary)
+        divine.callback = self._toggle_divine
+        self.add_item(divine)
+        comp = discord.ui.Button(label="役職構成を入力", style=discord.ButtonStyle.primary, emoji="🎭")
+        comp.callback = self._open_composition
+        self.add_item(comp)
+        auto = discord.ui.Button(label="役職構成を自動に戻す", style=discord.ButtonStyle.secondary)
+        auto.callback = self._auto_composition
+        self.add_item(auto)
+
+    async def _check(self, interaction: discord.Interaction) -> bool:
+        s = self.session
+        if s.started:
+            await interaction.response.send_message("設定を変えられるのは、募集中だけです。", ephemeral=True)
+            return False
+        if interaction.user.id != s.game.host_id:
+            await interaction.response.send_message("主催者だけが変更できます。", ephemeral=True)
+            return False
+        return True
+
+    async def _refresh(self, interaction: discord.Interaction, text: str) -> None:
+        await interaction.response.edit_message(
+            content=options_text(self.session.game) + "\n\n" + text, view=SettingView(self.session))
+        await refresh_lobby(self.session)
+
+    async def _toggle_guard(self, interaction: discord.Interaction):
+        if not await self._check(interaction):
+            return
+        g = self.session.game
+        g.allow_consecutive_guard = not g.allow_consecutive_guard
+        await self._refresh(interaction, "連続ガードを変えました。")
+
+    async def _toggle_divine(self, interaction: discord.Interaction):
+        if not await self._check(interaction):
+            return
+        g = self.session.game
+        g.first_night_divine = "random" if g.first_night_divine == "choose" else "choose"
+        await self._refresh(interaction, "初日の占いを変えました。")
+
+    async def _open_composition(self, interaction: discord.Interaction):
+        if not await self._check(interaction):
+            return
+        await interaction.response.send_modal(CompositionModal(self.session))
+
+    async def _auto_composition(self, interaction: discord.Interaction):
+        if not await self._check(interaction):
+            return
+        self.session.game.custom_composition = None
+        await self._refresh(interaction, "役職構成を自動(人数に合わせる)に戻しました。")
+
+
+class CompositionModal(discord.ui.Modal, title="役職構成"):
+    setting = discord.ui.TextInput(
+        label="役職と人数(例: 人狼2 占い師1 騎士1 市民3)",
+        placeholder="人狼2 占い師1 騎士1 市民3",
+        required=True, max_length=200)
+
+    def __init__(self, session):
+        super().__init__()
+        self.session = session
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            comp = parse_composition(self.setting.value)
+        except ValueError as e:
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            return
+        self.session.game.custom_composition = comp
+        await interaction.response.send_message(
+            "役職構成を設定しました: " + composition_text(comp)
+            + "\n※合計が参加人数と合わない場合は開始できません。", ephemeral=True)
+        await refresh_lobby(self.session)

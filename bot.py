@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from game import Game, Mode
 from roles import composition_text, parse_composition
 from session import Session
+from views import OptionsView, options_text
 from store import Store
 
 load_dotenv()
@@ -194,6 +195,17 @@ async def roles_command(interaction: discord.Interaction, setting: str = ""):
     if s.lobby_message:
         with contextlib.suppress(discord.HTTPException):
             await s.lobby_message.edit(embed=s.lobby_embed())
+
+
+@jinro.command(name="options", description="ゲームの設定を見る・変える(変えるのは主催者・募集中だけ)")
+async def options_command(interaction: discord.Interaction):
+    s = client.games.get(interaction.guild_id)
+    if not s:
+        await interaction.response.send_message("参加者募集中のゲームがありません。", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        options_text(s.game) + "\n\n見る・変えるを、下のボタンから選んでください。",
+        view=OptionsView(s), ephemeral=True)
 
 
 @jinro.command(name="stop", description="ゲームを中止します(主催者・サーバー管理者のみ)")

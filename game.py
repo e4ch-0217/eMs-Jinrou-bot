@@ -91,6 +91,9 @@ class Game:
         self.survey: dict[int, int] = {}           # 怪しい人アンケート: 回答者 -> 指名した人
         self.survey_notes: dict[int, str] = {}     # 狂人の一言: 回答者 -> 一言
         self.new_pacts: list[int] = []             # 今夜、盟約を結んだ盟約者(チャンネル作成用)
+        # ゲームごとの設定(/jinro options で、募集中だけ変えられる。次のゲームでは初期値に戻る)
+        self.allow_consecutive_guard = False       # 連続ガードを許可するか(初期値は禁止)
+        self.first_night_divine = "random"         # 初日の占い: "random"(ランダムな白を伝える) / "choose"(占う相手を選ぶ)
 
         # COと報告
         self.co: dict[int, str] = {}                              # いまCOしている役職
@@ -255,8 +258,11 @@ class Game:
         self.new_pacts.append(user_id)
 
     def first_night_actors(self) -> dict[int, str]:
-        """初日の夜に行動するのは、盟約者だけ。"""
-        return {p.user_id: "pact" for p in self.alive_players() if self.pact_needed(p)}
+        """初日の夜に行動するのは、盟約者と(設定で選ぶ場合の)占い師。"""
+        actors = {p.user_id: "pact" for p in self.alive_players() if self.pact_needed(p)}
+        if self.first_night_divine == "choose":
+            actors.update({p.user_id: "divine" for p in self.alive_players() if p.role == "占い師"})
+        return actors
 
     def night_actors(self) -> dict[int, str]:
         """夜に行動する生存者 {user_id: 行動}。ワンナイトは占いだけ。"""
@@ -280,7 +286,8 @@ class Game:
         if act == "attack":
             return [p for p in alive if p.role not in ATTACKERS]
         if act == "guard":
-            return [p for p in alive if p.user_id != user_id and p.user_id != self.last_guard_target]
+            return [p for p in alive if p.user_id != user_id
+                    and (self.allow_consecutive_guard or p.user_id != self.last_guard_target)]
         return [p for p in alive if p.user_id != user_id]
 
     def record_night_action(self, user_id: int, act: str, target: int) -> str | None:

@@ -35,7 +35,7 @@ ROLE_BONUS = {
 }
 KNIGHT_GJ_LIMIT = 2
 
-# 追加役職(狂信者・囁き狂人・共有者・囁き共有者・大狼・猫又)の持ち主は、陣営勝利報酬が増える(役職ボーナスの代わり)。
+# 拡張役職(狂信者・囁き狂人・共有者・囁き共有者・大狼・猫又)の持ち主は、陣営勝利報酬が増える(役職ボーナスの代わり)。
 # 人狼ゲームだけ。参戦費の上限の計算には、増えたあとの金額が入る。
 EXTRA_ROLE_WIN_MULT = 1.5
 
@@ -59,7 +59,7 @@ class Result:
     quit_early: bool          # 突然死したか
     role_bonus: int = 0       # 役職ボーナスの合計(計算済み)
     left: bool = False        # 自分から途中で抜けたか(報酬なし・参戦費は返さない)
-    win_mult: float = 1.0     # 陣営勝利報酬の倍率(追加役職の持ち主は EXTRA_ROLE_WIN_MULT)
+    win_mult: float = 1.0     # 陣営勝利報酬の倍率(拡張役職の持ち主は EXTRA_ROLE_WIN_MULT)
 
 
 def raw_payout(r: Result, table: dict) -> int:

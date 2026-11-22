@@ -399,13 +399,16 @@ class Session(Handlers):
         g = self.game
         g.phase = Phase.NIGHT
         g.reset_night()
-        for p in g.players.values():
-            if p.role == "占い師":
-                target = g.random_white(p.user_id)
-                if target:
-                    self.first_night_info[p.user_id] = (
-                        f"🔮 初日の占い: **{target.name}** は **{RESULT_LABEL['人間']}** です。")
-        actors = g.first_night_actors()             # 初日は、盟約者だけが盟約先を選ぶ
+        self.night_replies = {}
+        choose = g.first_night_divine == "choose"
+        if not choose:
+            for p in g.players.values():
+                if p.role == "占い師":
+                    target = g.random_white(p.user_id)
+                    if target:
+                        self.first_night_info[p.user_id] = (
+                            f"🔮 初日の占い: **{target.name}** は **{RESULT_LABEL['人間']}** です。")
+        actors = g.first_night_actors()             # 初日は、盟約者と(設定すれば)占い師だけが行動する
         self.pending_night = set(actors)
         self.in_first_night = True
         self.night_event.clear()
@@ -413,26 +416,35 @@ class Session(Handlers):
         await self.set_wolf_chat(True)
         await self.set_share_chat(True)
         if actors:
+            desc = "襲撃はありません。"
+            desc += ("盟約者は、「夜の行動」から盟約先を選んでください。" if any(
+                a == "pact" for a in actors.values()) else "")
+            desc += ("占い師は、「夜の行動」から占う相手を選んでください。" if choose else
+                     "占い師には、ランダムな「人間」が1人伝えられます。")
             msg = await self.channel.send(embed=discord.Embed(
-                title="🌙 恐ろしい夜がやってきました(初日)",
-                description=("襲撃はありません。盟約者は、「夜の行動」から盟約先を選んでください。"
-                             "占い師には、ランダムな「人間」が1人伝えられます。"),
+                title="🌙 恐ろしい夜がやってきました(初日)", description=desc,
                 color=discord.Color.dark_blue()), view=NightView(self))
             if not self.pending_night:
                 self.night_event.set()
             await wait_event(self.night_event, C.NIGHT_SECONDS)
             with contextlib.suppress(discord.HTTPException):
                 await msg.edit(view=None)
-            for uid in list(self.pending_night):    # 選ばなかった盟約者は、ランダム
-                targets = g.night_targets(uid, "pact")
-                if targets:
-                    g.record_night_action(uid, "pact", random.choice(targets).user_id)
+            for uid in list(self.pending_night):    # 選ばなかった人は、ランダム
+                targets = g.night_targets(uid, actors[uid])
+                if not targets:
+                    continue
+                t = random.choice(targets).user_id
+                r = g.record_night_action(uid, actors[uid], t)
+                if actors[uid] == "divine":
+                    self.seer_results.setdefault(uid, []).append(
+                        f"🔮 時間切れのため、**{g.players[t].name}** を占いました。結果: **{RESULT_LABEL[r]}**")
             self.pending_night.clear()
             await self.setup_pact_channels()
+            await self.reveal_night_replies()
         else:
             await self.channel.send(embed=discord.Embed(
                 title="🌙 恐ろしい夜がやってきました(初日)",
-                description="襲撃はありません。占い師には、ランダムな「人間」が1人伝えられます。",
+                description="襲撃はありません。" + ("" if choose else "占い師には、ランダムな「人間」が1人伝えられます。"),
                 color=discord.Color.dark_blue()))
             await asyncio.sleep(C.FIRST_NIGHT_SECONDS)
         self.in_first_night = False
@@ -1022,7 +1034,7 @@ class Session(Handlers):
                               color=discord.Color.green())
         lines = [f"・{g.players[u].name}{'' if u in self.payers else '(免除)'}"
                  f"{'(突然死)' if g.players[u].quit_early else ''}{'(退出)' if g.players[u].left else ''}"
-                 f"{'(追加役職×' + str(points.EXTRA_ROLE_WIN_MULT) + ')' if ROLES[g.players[u].role].extra and not g.one_night and g.team_of(g.players[u]) == winner else ''}"
+                 f"{'(拡張役職×' + str(points.EXTRA_ROLE_WIN_MULT) + ')' if ROLES[g.players[u].role].extra and not g.one_night and g.team_of(g.players[u]) == winner else ''}"
                  f": +{a}pt" for u, a in s.final.items()]
         embed.add_field(name=f"💰 ポイント(還元率 {round(s.ratio * 100)}%)",
                         value="\n".join(lines)[:1000], inline=False)

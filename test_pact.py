@@ -78,6 +78,22 @@ def test_wolf_partner_pact_is_not_an_attacker():
     assert sum(1 for p in g.alive_players() if p.role in ATTACKERS) == 1
 
 
+def test_consecutive_guard_default_forbidden_and_setting():
+    g = make_game({1: "騎士", 2: "市民", 3: "人狼", 4: "市民"})
+    g.last_guard_target = 2
+    assert 2 not in [p.user_id for p in g.night_targets(1, "guard")]
+    g.allow_consecutive_guard = True
+    assert 2 in [p.user_id for p in g.night_targets(1, "guard")]
+
+
+def test_first_night_divine_setting():
+    g = make_game({1: "占い師", 2: "市民", 3: "人狼", 4: "市民"})
+    assert "占い師" not in [g.players[u].role for u in g.first_night_actors()]
+    g.first_night_divine = "choose"
+    assert g.first_night_actors().get(1) == "divine"
+    assert g.night_targets(1, "divine")  # 占う相手が選べる
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     for t in tests:
