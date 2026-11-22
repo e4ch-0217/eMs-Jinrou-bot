@@ -7,7 +7,7 @@ import discord
 
 import config as C
 import note_rules as NR
-from game import PEACE_VOTE, RESULT_LABEL, Mode, Phase
+from game import NO_ATTACK, PEACE_VOTE, RESULT_LABEL, Mode, Phase
 from roles import ATTACKERS, NOTE_ONLY_ROLES, ROLES, SURVEY_ROLES, WOLF_CHAT_ROLES, WOLF_SIDE_CO
 from views import ConfirmCOView, ConfirmGreedyView, ConfirmLeaveView, NoteModal, PickView, ResultView
 
@@ -118,13 +118,15 @@ class Handlers:
             title = {"attack": "襲撃する相手", "divine": "占う相手", "guard": "護衛する相手",
                      "pact": "盟約先"}[act]
             targets = [(t.user_id, t.name) for t in g.night_targets(uid, act)]
+            if act == "attack" and g.skip_available():
+                targets.append((NO_ATTACK, "襲撃しない"))
             if not targets:
                 await deny(interaction, "選べる相手がいません。")
                 return
 
             async def on_pick(i: discord.Interaction, target: int) -> None:
                 result = g.record_night_action(uid, act, target)
-                name = g.players[target].name
+                name = g.target_name(target)
                 if act == "divine":
                     # 結果は、夜が終わるときに一斉に表示する
                     self.night_replies[uid] = (
@@ -136,6 +138,8 @@ class Handlers:
                     role = ROLES[g.players[target].role].name
                     text = (f"🤝 **{name}** を盟約先に選びました。\n"
                             f"盟約先の役職は **{role}** です。今から、盟約先の陣営({'村人陣営' if g.team_of(g.players[uid]) == 'village' else '人狼陣営'})で動きます。")
+                elif target == NO_ATTACK:
+                    text = "🌙 **襲撃しない** を選びました。"
                 else:
                     text = f"🐺 **{name}** を襲撃先に選びました。"
                 await i.response.edit_message(content=text + "\n(確定しました)", view=None)
@@ -235,6 +239,8 @@ class Handlers:
         options: list[tuple[int, str]] = []
         if uid in self.pending_night:
             options += [(t.user_id, t.name) for t in g.night_targets(uid, "attack")]
+            if g.skip_available():
+                options.append((NO_ATTACK, "襲撃しない"))
         if not p.greedy_used:
             options.append((-2, "能力を使う(もう1人を襲撃)"))
         if not options:
@@ -254,8 +260,9 @@ class Handlers:
                                   on_greedy, "もう1人の襲撃先"))
                 return
             g.record_night_action(uid, "attack", target)
-            await i.response.edit_message(
-                content=f"🐺 **{g.players[target].name}** を襲撃先に選びました。\n(確定しました)", view=None)
+            text = ("🌙 **襲撃しない** を選びました。" if target == NO_ATTACK
+                    else f"🐺 **{g.target_name(target)}** を襲撃先に選びました。")
+            await i.response.edit_message(content=text + "\n(確定しました)", view=None)
             self.pending_night.discard(uid)
             if not self.pending_night:
                 self.night_event.set()

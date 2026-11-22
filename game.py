@@ -14,6 +14,7 @@ from roles import (
 
 MIN_PLAYERS = 3
 PEACE_VOTE = -1      # 投票の「誰も追放しない」(平和主義者が生きている間だけ出る)
+NO_ATTACK = -3       # 夜の「襲撃しない」(能ある人狼が生きている間だけ出る)
 FULL_MIN_PLAYERS = 6   # この人数以上なら人狼ゲーム、未満ならワンナイト
 MAX_PLAYERS = 20
 RESULT_LABEL = {"人間": "人間(白)", "人狼": "人狼(黒)"}
@@ -59,6 +60,7 @@ class NightResult:
     greedy_target: int | None = None      # 強欲な人狼の能力の対象(使ったときだけ)
     greedy_victim: int | None = None      # 強欲の対象で、護衛されずに死ぬ人
     gj: bool = False                      # 護衛が、どちらかの襲撃を防いだ
+    skipped: bool = False                 # 能ある人狼の効果で、全員が「襲撃しない」を選んだ
 
     @property
     def victims(self) -> list[int]:
@@ -327,9 +329,15 @@ class Game:
         if self.one_night:                       # 簡略化人狼は、夜が1回だけで、襲撃はしない
             return NightResult(None, self.guard_target, None, self.divine)
         pool = [p.user_id for p in self.alive_players() if p.role not in ATTACKERS]
+        attackers = [p for p in self.alive_players() if p.role in ATTACKERS]
+        skipped = bool(attackers) and self.skip_available() and all(
+            self.attack_votes.get(p.user_id) == NO_ATTACK for p in attackers)
+        real = {u: t for u, t in self.attack_votes.items() if t != NO_ATTACK}
         attack: int | None = None
-        if self.attack_votes:
-            counts = Counter(self.attack_votes.values())
+        if skipped:
+            attack = None                        # 効果発動: 今夜は誰も襲撃しない
+        elif real:
+            counts = Counter(real.values())
             top = max(counts.values())
             attack = random.choice([t for t, c in counts.items() if c == top])  # 同数ならランダム
         elif pool:
@@ -341,7 +349,7 @@ class Game:
             greedy_victim = greedy
         gj = (attack is not None and attack == self.guard_target) or (greedy is not None and greedy == self.guard_target)
         return NightResult(attack, self.guard_target, victim, self.divine,
-                           greedy_target=greedy, greedy_victim=greedy_victim, gj=gj)
+                           greedy_target=greedy, greedy_victim=greedy_victim, gj=gj, skipped=skipped)
 
     def apply_night(self, res: NightResult) -> None:
         """夜の結果を記録する(襲撃成功・GJ・夜を越えた回数)。死亡の処理は呼び出し側。"""
@@ -384,7 +392,15 @@ class Game:
         return peace_votes > max(counts.values(), default=0)
 
     def target_name(self, uid: int) -> str:
-        return "誰も追放しない" if uid == PEACE_VOTE else self.players[uid].name
+        if uid == PEACE_VOTE:
+            return "誰も追放しない"
+        if uid == NO_ATTACK:
+            return "襲撃しない"
+        return self.players[uid].name
+
+    def skip_available(self) -> bool:
+        """能ある人狼が生きている間は、人狼全員が「襲撃しない」を選べる。"""
+        return any(p.alive and p.role == "能ある人狼" for p in self.players.values())
 
     def record_votes(self, counts: Counter) -> None:
         for uid, c in counts.items():

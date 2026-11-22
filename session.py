@@ -529,7 +529,13 @@ class Session(Handlers):
 
     async def post_wolf_attack(self, res, real_votes: dict) -> None:
         """人狼の巣に、襲撃先がどう決まったかを書く(多数決・同数・棄権)。"""
-        if self.wolf_channel is None or res.attack_target is None:
+        if self.wolf_channel is None:
+            return
+        if res.skipped:
+            with contextlib.suppress(discord.HTTPException):
+                await self.wolf_channel.send("🌙 能ある人狼の能力で、今夜は誰も襲撃しません(生存している人狼が全員「襲撃しない」を選んだため)。")
+            return
+        if res.attack_target is None:
             return
         g = self.game
         name = g.players[res.attack_target].name
@@ -571,8 +577,16 @@ class Session(Handlers):
             lines.append(f"⚔️ 強欲な人狼の能力: {g.players[res.greedy_target].name} を襲撃")
         if res.gj:
             lines.append("✨ 護衛成功(GJ)!")
+        if res.skipped:
+            lines.append("🌙 能ある人狼の効果で、今夜は襲撃なし")
         lines.append("結果: " + ("、".join(f"{g.players[v].name} が襲撃されました" for v in res.victims)
                                 if res.victims else "犠牲者なし"))
+        seer_lines = [f"🐺 賢狼の能力: 襲撃された **{g.players[v].name}** の役職は **{ROLES[g.players[v].role].name}** でした。"
+                      for v in res.victims] if any(p.alive and p.role == "賢狼" for p in g.players.values()) else []
+        lines += seer_lines
+        if seer_lines and self.wolf_channel:
+            with contextlib.suppress(discord.HTTPException):
+                await self.wolf_channel.send("\n".join(seer_lines))
         if g.survey_roles_active():
             answered = g.survey_counts()
             silent = [p.name for p in g.alive_players()

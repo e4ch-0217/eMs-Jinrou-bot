@@ -21,7 +21,7 @@ def set_roles(g, roles):
 
 
 def test_extra_roles_defined():
-    assert set(EXTRA_ROLES) == {"狂信者", "囁き狂人", "共有者", "囁き共有者", "大狼", "静かな人狼", "強欲な人狼", "平和主義者", "猫又", "盟約者"}
+    assert set(EXTRA_ROLES) == {"狂信者", "囁き狂人", "共有者", "囁き共有者", "大狼", "静かな人狼", "強欲な人狼", "平和主義者", "猫又", "盟約者", "賢狼", "能ある人狼"}
     assert all(ROLES[r].extra for r in EXTRA_ROLES)
     assert ROLES["大狼"].team == "wolf" and ROLES["大狼"].seen_as == "人間"
     assert ROLES["狂信者"].team == "wolf" and ROLES["狂信者"].seen_as == "人間"
@@ -91,7 +91,7 @@ def test_great_wolf_attack_counts_kills_and_resolves():
 
 
 def test_all_wolf_roles_are_attackers_set():
-    assert set(ATTACKERS) == {"人狼", "大狼", "静かな人狼", "強欲な人狼"}
+    assert set(ATTACKERS) == {"人狼", "大狼", "静かな人狼", "強欲な人狼", "賢狼", "能ある人狼"}
     assert "静かな人狼" in WOLF_CHAT_ROLES
     assert ROLES["静かな人狼"].team == "wolf" and ROLES["静かな人狼"].seen_as == "人狼"
     assert ROLES["大狼"].night_action == "attack"

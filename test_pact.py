@@ -94,6 +94,37 @@ def test_first_night_divine_setting():
     assert g.night_targets(1, "divine")  # 占う相手が選べる
 
 
+def test_nou_aru_all_skip_means_no_victim():
+    from game import NO_ATTACK
+    g = make_game({1: "能ある人狼", 2: "人狼", 3: "市民", 4: "市民"})
+    g.attack_votes = {1: NO_ATTACK, 2: NO_ATTACK}
+    res = g.resolve_night()
+    assert res.skipped and res.victims == []
+
+
+def test_nou_aru_one_attack_still_kills():
+    from game import NO_ATTACK
+    g = make_game({1: "能ある人狼", 2: "人狼", 3: "市民", 4: "市民"})
+    g.attack_votes = {1: NO_ATTACK, 2: 3}
+    res = g.resolve_night()
+    assert not res.skipped and res.victims == [3]
+
+
+def test_skip_only_while_nou_aru_alive():
+    from game import NO_ATTACK
+    g = make_game({1: "能ある人狼", 2: "人狼", 3: "市民", 4: "市民"})
+    g.kill(1)
+    assert not g.skip_available()
+    g.attack_votes = {2: NO_ATTACK}
+    res = g.resolve_night()
+    assert not res.skipped   # 能ある人狼がいない夜は、襲撃しないは効かない
+
+
+def test_kenrou_is_wolf_side_and_attacker():
+    assert ROLES["賢狼"].team == "wolf" and ROLES["賢狼"].seen_as == "人狼"
+    assert "賢狼" in ATTACKERS and ROLES["賢狼"].extra
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     for t in tests:
