@@ -48,7 +48,7 @@ class Session(Handlers):
         self.co_message: discord.Message | None = None
         self.heaven: discord.TextChannel | None = None
         self.wolf_channel: discord.TextChannel | None = None
-        self.share_channel: discord.TextChannel | None = None   # 囁き共有者の相談部屋(囁き共有者が2人以上のとき)
+        self.share_channels: list[tuple[discord.TextChannel, tuple[int, int]]] = []   # 囁き共有者の組ごとの相談部屋
         self.task: asyncio.Task | None = None
         self.started = self.finished = self.cleaned = False
         self.spectate_msg: discord.Message | None = None  # 観戦ボタンのメッセージ(終わったら消す)
@@ -154,13 +154,11 @@ class Session(Handlers):
 
     async def set_share_chat(self, open_: bool) -> None:
         """共有者の巣(囁き共有者の相談部屋)は、夜の間だけ書き込める。"""
-        if not self.share_channel:
-            return
         with contextlib.suppress(discord.HTTPException):
-            for p in self.game.players.values():
-                if p.role == "囁き共有者" and self.member(p.user_id):
-                    await self.share_channel.set_permissions(
-                        self.member(p.user_id), view_channel=True, send_messages=open_)
+            for channel, pair in self.share_channels:
+                for uid in pair:
+                    if self.member(uid):
+                        await channel.set_permissions(self.member(uid), view_channel=True, send_messages=open_)
 
     async def kill(self, uid: int) -> None:
         g = self.game
@@ -285,16 +283,21 @@ class Session(Handlers):
                 self.wolf_channel = await self.guild.create_text_channel(
                     "人狼の巣", category=self.channel.category, overwrites=overwrites,
                     topic="人狼だけの相談部屋(夜だけ書き込めます)")
-            whisperers = [p for p in g.players.values() if p.role == "囁き共有者"]
-            if len(whisperers) >= 2:
+            done: set[int] = set()
+            for uid, p in list(g.players.items()):
+                if p.role != "囁き共有者" or uid in done or uid not in g.partner:
+                    continue
+                other = g.partner[uid]
+                done |= {uid, other}
                 overwrites = dict(hidden)
-                for w in whisperers:
-                    if self.member(w.user_id):
-                        overwrites[self.member(w.user_id)] = discord.PermissionOverwrite(
+                for m in (uid, other):
+                    if self.member(m):
+                        overwrites[self.member(m)] = discord.PermissionOverwrite(
                             view_channel=True, send_messages=False)
-                self.share_channel = await self.guild.create_text_channel(
-                    "共有者の巣", category=self.channel.category, overwrites=overwrites,
-                    topic="囁き共有者だけの相談部屋(夜だけ書き込めます)")
+                channel = await self.guild.create_text_channel(
+                    f"共有者の巣{len(self.share_channels) + 1}", category=self.channel.category,
+                    overwrites=overwrites, topic="組の2人だけの相談部屋(夜だけ書き込めます)")
+                self.share_channels.append((channel, (uid, other)))
         except discord.HTTPException:
             await self.channel.send("⚠️ チャンネルを作れませんでした。天国と相談部屋なしで進めます。")
         if self.heaven:
@@ -939,7 +942,7 @@ class Session(Handlers):
             if m:
                 with contextlib.suppress(discord.HTTPException):
                     await self.channel.set_permissions(m, overwrite=None)
-        channels = [c for c in (self.game_channel, self.wolf_channel, self.share_channel, self.heaven) if c]
+        channels = [c for c in (self.game_channel, self.wolf_channel, self.heaven) if c] + [c for c, _ in self.share_channels]
         for c in channels:
             with contextlib.suppress(discord.HTTPException):
                 await c.send(f"このチャンネルは{C.CLEANUP_SECONDS}秒後に削除されます。")

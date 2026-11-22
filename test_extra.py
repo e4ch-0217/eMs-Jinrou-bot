@@ -141,6 +141,21 @@ def test_peace_wins_only_when_strictly_more_than_top_player():
     assert g.target_name(-1) == "誰も追放しない"
 
 
+def test_sharer_pairs_are_same_role_and_know_only_partner():
+    for _ in range(50):
+        g = make_game({"人狼": 1, "共有者": 4, "囁き共有者": 2, "市民": 3})
+        assert set(g.partner) == {u for u, p in g.players.items() if p.role in ("共有者", "囁き共有者")}
+        for a, b in g.partner.items():
+            assert g.partner[b] == a and a != b
+            assert g.players[a].role == g.players[b].role      # 混合の組はない
+
+
+def test_sharer_pair_count_must_be_even():
+    assert validate_composition({"人狼": 1, "共有者": 1, "市民": 4}, 6, False)
+    assert validate_composition({"人狼": 1, "囁き共有者": 3, "市民": 2}, 6, False)
+    assert validate_composition({"人狼": 1, "共有者": 2, "囁き共有者": 2, "市民": 2}, 7, False) is None
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for t in tests:

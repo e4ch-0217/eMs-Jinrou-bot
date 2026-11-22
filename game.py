@@ -62,6 +62,7 @@ class Game:
         self.host_id = host_id
 
         self.players: dict[int, Player] = {}
+        self.partner: dict[int, int] = {}          # 共有者・囁き共有者の組の相手(組の人だけが知る)
         self.seats: list[int] = []                 # 席順(開始時にランダムで決める)
         self.custom_composition: dict[str, int] | None = None
         self.mode = Mode.FULL
@@ -198,6 +199,17 @@ class Game:
         for uid, role in assigned.items():
             self.players[uid].role = role
             self.players[uid].alive = True
+        self.make_pairs()
+
+    def make_pairs(self) -> None:
+        """共有者・囁き共有者を、それぞれ2人1組にする(組は同じ種類どうし。ランダム)。"""
+        self.partner = {}
+        for role in ("共有者", "囁き共有者"):
+            members = [u for u, p in self.players.items() if p.role == role]
+            random.shuffle(members)
+            for a, b in zip(members[::2], members[1::2]):
+                self.partner[a] = b
+                self.partner[b] = a
 
     # ---------- 夜 ----------
     def reset_night(self) -> None:

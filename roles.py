@@ -37,9 +37,9 @@ ROLE_LIST = [
          "人狼陣営です。人狼が誰かを全員知っていて、人狼からも分かります。夜は人狼の巣で、人狼と相談できます。"
          "占い・霊媒では「人間」と出ます。", extra=True),
     Role("共有者", "village", "人間", None, "🤝",
-         "村人陣営です。他の共有者が誰かを知っています。夜の行動はありません。", extra=True),
+         "村人陣営です。2人1組で、組の相手(共有者)が誰かだけ知っています。組はゲーム開始時にランダムで決まります。夜の行動はありません。", extra=True),
     Role("囁き共有者", "village", "人間", None, "🔔",
-         "村人陣営です。他の共有者が誰かを知っていて、夜は共有者の巣で、秘密の相談ができます。", extra=True),
+         "村人陣営です。2人1組で、組の相手(囁き共有者)が誰かだけ知っています。夜は、組だけの「共有者の巣」で秘密の相談ができます。", extra=True),
     Role("大狼", "wolf", "人間", "attack", "🌑",
          "人狼と同じように、夜に1人を襲撃します。人狼の数にも数えます。占いでは「人間」と出ます。", extra=True),
     Role("静かな人狼", "wolf", "人狼", "attack", "🤫",
@@ -59,7 +59,6 @@ ROLE_ORDER = [r.name for r in ROLE_LIST]
 ONE_NIGHT_ROLES = {"人狼", "狂人", "占い師", "市民"}   # ワンナイトで使える役職(追加役職は使えない)
 ATTACKERS = ("人狼", "大狼", "静かな人狼")                           # 夜に襲撃する役職。人狼の数に数える
 WOLF_CHAT_ROLES = ("人狼", "大狼", "静かな人狼", "囁き狂人")          # 人狼の巣で話せる役職
-SHARER_ROLES = ("共有者", "囁き共有者")                 # お互いを知っている役職
 EXTRA_ROLES = tuple(r.name for r in ROLE_LIST if r.extra)
 CO_CHOICES = ["占い師", "霊媒師", "騎士", "人狼", "狂人"]       # COできる役職(人狼・狂人は偽COも可)
 WOLF_SIDE_CO = ("人狼", "狂人")                         # 人狼陣営の役職。COの前に確認する
@@ -110,6 +109,9 @@ def validate_composition(comp: dict[str, int], n: int, one_night: bool) -> str |
     total = sum(comp.values())
     if total != n:
         return f"役職の合計({total}人)が参加人数({n}人)と合っていません。"
+    for r in ("共有者", "囁き共有者"):
+        if comp.get(r, 0) % 2:
+            return f"{r}は2人1組なので、人数は2人・4人…の偶数にしてください(今は{comp[r]}人)。"
     wolves = sum(comp.get(r, 0) for r in ATTACKERS)
     if wolves < 1:
         return "人狼(または大狼)が1人もいません。"
