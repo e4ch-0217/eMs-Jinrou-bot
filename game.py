@@ -45,6 +45,7 @@ class Player:
     votes_received: int = 0   # 処刑投票で入った票の合計
     quit_early: bool = False  # 突然死したか(VCに戻らなかった)
     left: bool = False        # 自分から途中で抜けたか(報酬なし・参戦費は返さない)
+    greedy_used: bool = False # 強欲な人狼: 能力を使ったか(1ゲーム1回)
 
 
 @dataclass
@@ -53,6 +54,13 @@ class NightResult:
     guard_target: int | None
     victim: int | None
     divine: tuple[int, int, str] | None   # (占い師, 対象, 結果)
+    greedy_target: int | None = None      # 強欲な人狼の能力の対象(使ったときだけ)
+    greedy_victim: int | None = None      # 強欲の対象で、護衛されずに死ぬ人
+    gj: bool = False                      # 護衛が、どちらかの襲撃を防いだ
+
+    @property
+    def victims(self) -> list[int]:
+        return [v for v in (self.victim, self.greedy_victim) if v is not None]
 
 
 class Game:
@@ -77,6 +85,7 @@ class Game:
         self.guard_target: int | None = None
         self.last_guard_target: int | None = None  # 前の夜の護衛先(連続ガード禁止)
         self.divine: tuple[int, int, str] | None = None
+        self.greedy_target: int | None = None      # 強欲な人狼の能力の対象(今夜)
         self.survey: dict[int, int] = {}           # 怪しい人アンケート: 回答者 -> 指名した人
         self.survey_notes: dict[int, str] = {}     # 狂人の一言: 回答者 -> 一言
 
@@ -212,8 +221,14 @@ class Game:
                 self.partner[b] = a
 
     # ---------- 夜 ----------
+    def record_greedy(self, user_id: int, target: int) -> None:
+        """強欲な人狼の能力(もう1人を襲撃)。1ゲーム1回。"""
+        self.players[user_id].greedy_used = True
+        self.greedy_target = target
+
     def reset_night(self) -> None:
         self.attack_votes = {}
+        self.greedy_target = None
         self.guard_actor = None
         self.guard_target = None
         self.divine = None
@@ -283,18 +298,24 @@ class Game:
         elif pool:
             attack = random.choice(pool)
         victim = None if attack is None or attack == self.guard_target else attack
-        return NightResult(attack, self.guard_target, victim, self.divine)
+        greedy = self.greedy_target
+        greedy_victim = None
+        if greedy is not None and greedy != self.guard_target and greedy != victim:
+            greedy_victim = greedy
+        gj = (attack is not None and attack == self.guard_target) or (greedy is not None and greedy == self.guard_target)
+        return NightResult(attack, self.guard_target, victim, self.divine,
+                           greedy_target=greedy, greedy_victim=greedy_victim, gj=gj)
 
     def apply_night(self, res: NightResult) -> None:
         """夜の結果を記録する(襲撃成功・GJ・夜を越えた回数)。死亡の処理は呼び出し側。"""
-        if res.victim is not None:
+        if res.victims:
             for p in self.alive_players():
                 if p.role in ATTACKERS:
-                    p.kills += 1
-        elif res.attack_target is not None and res.attack_target == res.guard_target and self.guard_actor is not None:
+                    p.kills += len(res.victims)
+        if res.gj and self.guard_actor is not None:
             self.players[self.guard_actor].gj += 1
         for p in self.alive_players():
-            if p.user_id != res.victim:
+            if p.user_id not in res.victims:
                 p.nights += 1
         self.last_guard_target = res.guard_target
 

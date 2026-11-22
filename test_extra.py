@@ -21,7 +21,7 @@ def set_roles(g, roles):
 
 
 def test_extra_roles_defined():
-    assert set(EXTRA_ROLES) == {"狂信者", "囁き狂人", "共有者", "囁き共有者", "大狼", "静かな人狼", "平和主義者", "猫又"}
+    assert set(EXTRA_ROLES) == {"狂信者", "囁き狂人", "共有者", "囁き共有者", "大狼", "静かな人狼", "強欲な人狼", "平和主義者", "猫又"}
     assert all(ROLES[r].extra for r in EXTRA_ROLES)
     assert ROLES["大狼"].team == "wolf" and ROLES["大狼"].seen_as == "人間"
     assert ROLES["狂信者"].team == "wolf" and ROLES["狂信者"].seen_as == "人間"
@@ -91,7 +91,7 @@ def test_great_wolf_attack_counts_kills_and_resolves():
 
 
 def test_all_wolf_roles_are_attackers_set():
-    assert set(ATTACKERS) == {"人狼", "大狼", "静かな人狼"}
+    assert set(ATTACKERS) == {"人狼", "大狼", "静かな人狼", "強欲な人狼"}
     assert "静かな人狼" in WOLF_CHAT_ROLES
     assert ROLES["静かな人狼"].team == "wolf" and ROLES["静かな人狼"].seen_as == "人狼"
     assert ROLES["大狼"].night_action == "attack"
@@ -154,6 +154,36 @@ def test_sharer_pair_count_must_be_even():
     assert validate_composition({"人狼": 1, "共有者": 1, "市民": 4}, 6, False)
     assert validate_composition({"人狼": 1, "囁き共有者": 3, "市民": 2}, 6, False)
     assert validate_composition({"人狼": 1, "共有者": 2, "囁き共有者": 2, "市民": 2}, 7, False) is None
+
+
+def test_greedy_adds_second_victim_and_guard_blocks_one():
+    g = make_game({"人狼": 1, "強欲な人狼": 1, "騎士": 1, "市民": 5})
+    set_roles(g, {0: "人狼", 1: "強欲な人狼", 2: "騎士", **{i: "市民" for i in range(3, 8)}})
+    g.reset_night()
+    g.record_night_action(0, "attack", 4)           # 人狼の多数決の1人
+    g.record_greedy(1, 5)                           # 強欲の能力で、もう1人
+    g.record_night_action(2, "guard", 5)            # 騎士は5番を護衛 -> 強欲の対象は防がれる
+    res = g.resolve_night()
+    assert res.victims == [4]
+    assert res.gj is True
+    g.apply_night(res)
+    assert g.players[2].gj == 1
+    assert g.players[1].greedy_used and not g.players[0].greedy_used
+
+
+def test_greedy_both_victims_when_unguarded():
+    g = make_game({"人狼": 1, "強欲な人狼": 1, "騎士": 1, "市民": 5})
+    set_roles(g, {0: "人狼", 1: "強欲な人狼", 2: "騎士", **{i: "市民" for i in range(3, 8)}})
+    g.reset_night()
+    g.record_night_action(0, "attack", 4)
+    g.record_greedy(1, 5)
+    g.record_night_action(2, "guard", 3)            # 護衛は関係ない場所
+    res = g.resolve_night()
+    assert sorted(res.victims) == [4, 5]
+    assert res.gj is False
+    g.apply_night(res)
+    assert g.players[0].kills == 2 and g.players[1].kills == 2
+    assert g.players[2].gj == 0
 
 
 if __name__ == "__main__":

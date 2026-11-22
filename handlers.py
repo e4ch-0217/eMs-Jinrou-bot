@@ -9,7 +9,7 @@ import config as C
 import note_rules as NR
 from game import PEACE_VOTE, RESULT_LABEL, Mode, Phase
 from roles import ATTACKERS, NOTE_ONLY_ROLES, ROLES, SURVEY_ROLES, WOLF_CHAT_ROLES, WOLF_SIDE_CO
-from views import ConfirmCOView, ConfirmLeaveView, NoteModal, PickView, ResultView
+from views import ConfirmCOView, ConfirmGreedyView, ConfirmLeaveView, NoteModal, PickView, ResultView
 
 
 async def deny(interaction: discord.Interaction, text: str) -> None:
@@ -43,6 +43,9 @@ class Handlers:
             text += "\n\n組の相手: " + (g.players[mate].name if mate in g.players else "いません")
             if p.role == "囁き共有者" and self.share_channels:
                 text += "\n夜の間だけ、組の2人だけの「共有者の巣」で相談できます。"
+        if p.role == "強欲な人狼":
+            text += "\n\n" + ("能力は使用済みです。" if p.greedy_used
+                                else "能力(1ゲーム1回): 夜の「夜の行動」から「能力を使う」を選ぶと、もう1人を襲撃できます。")
         for line in self.seer_results.get(uid, []):
             text += "\n\n" + line
         if uid in self.first_night_info:
@@ -88,6 +91,9 @@ class Handlers:
             return
         if g.phase != Phase.NIGHT:
             await deny(interaction, "いまは夜ではありません。")
+            return
+        if p.role == "強欲な人狼":
+            await self.greedy_menu(interaction)
             return
         if g.mode == Mode.NOTE:
             await self.note_night_menu(interaction)
@@ -201,6 +207,57 @@ class Handlers:
 
         await interaction.response.send_message(
             "交換する相手を選んでください。", view=PickView(options, on_thief, "交換する相手"), ephemeral=True)
+
+    async def greedy_menu(self, interaction: discord.Interaction) -> None:
+        """強欲な人狼の夜の行動: 通常の襲撃先(多数決に入る)と、能力(もう1人を襲撃・1ゲーム1回)。"""
+        g = self.game
+        uid = interaction.user.id
+        p = g.players[uid]
+        options: list[tuple[int, str]] = []
+        if uid in self.pending_night:
+            options += [(t.user_id, t.name) for t in g.night_targets(uid, "attack")]
+        if not p.greedy_used:
+            options.append((-2, "能力を使う(もう1人を襲撃)"))
+        if not options:
+            await deny(interaction, "今夜は、もう行動を決めています。")
+            return
+
+        async def on_pick(i: discord.Interaction, target: int) -> None:
+            if target == -2:
+                async def on_greedy(j: discord.Interaction, t: int) -> None:
+                    await j.response.edit_message(
+                        content=f"**{g.players[t].name}** を、能力を使って襲撃します。**取り消せません**。よろしいですか?",
+                        view=ConfirmGreedyView(self, uid, t))
+
+                await i.response.edit_message(
+                    content="能力で、もう1人の襲撃先を選んでください。",
+                    view=PickView([(t.user_id, t.name) for t in g.night_targets(uid, "attack")],
+                                  on_greedy, "もう1人の襲撃先"))
+                return
+            g.record_night_action(uid, "attack", target)
+            await i.response.edit_message(
+                content=f"🐺 **{g.players[target].name}** を襲撃先に選びました。\n(確定しました)", view=None)
+            self.pending_night.discard(uid)
+            if not self.pending_night:
+                self.night_event.set()
+
+        await interaction.response.send_message("行動を選んでください。", view=PickView(options, on_pick, "行動"),
+                                                ephemeral=True)
+
+    async def commit_greedy(self, interaction: discord.Interaction, uid: int, target: int) -> None:
+        """能力を確定する。人狼の巣に知らせる。取り消しはできない。"""
+        g = self.game
+        p = g.players.get(uid)
+        if p is None or not p.alive or p.greedy_used or g.phase != Phase.NIGHT:
+            await interaction.response.edit_message(content="今は能力を使えません。", view=None)
+            return
+        g.record_greedy(uid, target)
+        tname = g.players[target].name
+        if self.wolf_channel:
+            with contextlib.suppress(discord.HTTPException):
+                await self.wolf_channel.send(f"⚔️ **{p.name}** が強欲な人狼の能力を使って、**{tname}** を襲撃します。")
+        await interaction.response.edit_message(
+            content=f"⚔️ **{tname}** を、能力で襲撃することにしました。(取り消せません)", view=None)
 
     async def note_open_vote(self, interaction: discord.Interaction) -> None:
         g, note = self.game, self.game.note

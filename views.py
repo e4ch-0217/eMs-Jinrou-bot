@@ -296,3 +296,22 @@ class TieVoteView(discord.ui.View):
     @discord.ui.button(label="決選に投票", style=discord.ButtonStyle.danger, emoji="🗳️")
     async def vote(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.session.open_tie_menu(interaction)
+
+
+class ConfirmGreedyView(discord.ui.View):
+    """強欲な人狼が、能力(もう1人の襲撃)を使う、最後の確認。取り消せない。"""
+
+    def __init__(self, session, uid: int, target: int):
+        super().__init__(timeout=60)
+        self.session, self.uid, self.target = session, uid, target
+
+    @discord.ui.button(label="はい、能力を使う", style=discord.ButtonStyle.danger)
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.uid:
+            await interaction.response.send_message("この確認は、本人だけが押せます。", ephemeral=True)
+            return
+        await self.session.commit_greedy(interaction, self.uid, self.target)
+
+    @discord.ui.button(label="やめる", style=discord.ButtonStyle.secondary)
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="能力は使いませんでした。", view=None)

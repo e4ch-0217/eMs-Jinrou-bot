@@ -428,6 +428,7 @@ class Session(Handlers):
         with contextlib.suppress(discord.HTTPException):
             await msg.edit(view=None)
 
+        real_votes = dict(g.attack_votes)              # 時間切れの前に、本人が選んだ襲撃
         for uid in list(self.pending_night):           # 時間切れの行動は、ランダム
             targets = g.night_targets(uid, actors[uid])
             if targets:
@@ -441,9 +442,28 @@ class Session(Handlers):
         res = g.resolve_night()
         g.apply_night(res)
         self.last_night = res
+        await self.post_wolf_attack(res, real_votes)
         await self.reveal_night_replies()
         await self.post_night_log(res)
         await asyncio.sleep(C.RESULT_DELAY)
+
+    async def post_wolf_attack(self, res, real_votes: dict) -> None:
+        """人狼の巣に、襲撃先がどう決まったかを書く(多数決・同数・棄権)。"""
+        if self.wolf_channel is None or res.attack_target is None:
+            return
+        g = self.game
+        name = g.players[res.attack_target].name
+        if not real_votes:
+            text = f"🎲 全員が棄権したので、ランダム抽選の結果、**{name}** を襲撃します。"
+        else:
+            counts = Counter(g.attack_votes.values())
+            top = max(counts.values())
+            if sum(1 for c in counts.values() if c == top) > 1:
+                text = f"🎲 同数だったので、その中からランダムで **{name}** を襲撃します。"
+            else:
+                text = f"🗳️ 多数決によって **{name}** を襲撃します。"
+        with contextlib.suppress(discord.HTTPException):
+            await self.wolf_channel.send(text)
 
     async def reveal_night_replies(self) -> None:
         """確定のときは何も出さず、結果は夜の終わりに一斉に表示する(確定の早さを読まれないため)。
@@ -467,10 +487,12 @@ class Session(Handlers):
         if res.divine:
             seer, target, result = res.divine
             lines.append(f"🔮 占い: {g.players[seer].name} → {g.players[target].name}({RESULT_LABEL[result]})")
-        if res.attack_target is not None and res.attack_target == res.guard_target:
+        if res.greedy_target is not None:
+            lines.append(f"⚔️ 強欲な人狼の能力: {g.players[res.greedy_target].name} を襲撃")
+        if res.gj:
             lines.append("✨ 護衛成功(GJ)!")
-        lines.append("結果: " + (f"{g.players[res.victim].name} が襲撃されました" if res.victim is not None
-                                else "犠牲者なし"))
+        lines.append("結果: " + ("、".join(f"{g.players[v].name} が襲撃されました" for v in res.victims)
+                                if res.victims else "犠牲者なし"))
         if g.survey_roles_active():
             answered = g.survey_counts()
             silent = [p.name for p in g.alive_players()
@@ -488,35 +510,43 @@ class Session(Handlers):
         g.phase = Phase.DAY
         res = self.last_night
         await self.apply_voice("silent")                  # 遺言の人以外は、昼の議論が始まるまで話せない
-        victim = res.victim if (res and res.victim is not None) else None
+        victims = list(res.victims) if res else []
         # 次の朝までVCに戻らなかった人(襲撃された人は除く)
-        gone = [uid for uid in list(self.absent) if uid != victim
+        gone = [uid for uid in list(self.absent) if uid not in victims
                 and g.players[uid].alive and not self.in_vc(self.member(uid))]
-        silenced = victim is not None and any(
-            x.role == "静かな人狼" and x.alive for x in g.players.values())   # 静かな人狼が生きていると、遺言はない
-        if victim is not None and silenced:
-            desc = (f"昨夜、**{g.players[victim].name}** が襲撃されました。\n"
-                    "🤫 静かな人狼がいるため、遺言はありません。")
-        elif victim is not None:
-            desc = (f"昨夜、**{g.players[victim].name}** が襲撃されました。\n"
-                    f"({C.VICTIM_WILL_SECONDS}秒、進行に関係ないことだけ話せます)")
+        silenced = bool(victims) and any(x.role == "静かな人狼" and x.alive for x in g.players.values())
+        names = "、".join(f"**{g.players[v].name}**" for v in victims)
+        if victims and silenced:
+            desc = f"昨夜、{names} が襲撃されました。\n🤫 静かな人狼がいるため、遺言はありません。"
+        elif victims:
+            desc = (f"昨夜、{names} が襲撃されました。\n"
+                    f"({C.VICTIM_WILL_SECONDS}秒ずつ、進行に関係ないことだけ話せます)")
         else:
             desc = "昨夜は誰も犠牲になりませんでした。"
-        nekomata_target = self.pick_nekomata_target(victim, "attack") if victim is not None else None
-        if nekomata_target is not None:      # 襲撃の道連れは、この朝の発表に一緒に出す
-            desc += f"\n🐱 猫又の道連れで、**{g.players[nekomata_target].name}** も死亡しました。"
+        # 猫又の道連れは、この朝の発表に一緒に出す
+        follows = []
+        for v in victims:
+            t = self.pick_nekomata_target(v, "attack")
+            if t is not None:
+                follows.append((v, t))
+                desc += f"\n🐱 猫又 **{g.players[v].name}** の道連れで、**{g.players[t].name}** も死亡しました。"
         if gone:
             desc += "\n\n🔌 次の朝までVCに戻らなかったため、**突然死**になりました: " + \
                     "、".join(g.players[u].name for u in gone)
         await self.channel.send(embed=discord.Embed(
             title="☀️ おはようございます", description=desc, color=discord.Color.gold()))
-        if victim is not None:
+        if victims:
             if silenced:
                 await asyncio.sleep(C.MORNING_SECONDS)    # 遺言なしのとき、発表を読む間
             else:
-                await self.speak(victim, C.VICTIM_WILL_SECONDS, after="silent")
-            await self.kill(victim)
-            await self.nekomata_follow(victim, nekomata_target)
+                for v in victims:                         # 襲撃された人が、順に遺言
+                    if g.players[v].alive:
+                        await self.speak(v, C.VICTIM_WILL_SECONDS, after="silent")
+            for v in victims:
+                if g.players[v].alive:
+                    await self.kill(v)
+            for v, t in follows:
+                await self.nekomata_follow(v, t)
         else:
             await asyncio.sleep(C.MORNING_SECONDS)
         for uid in gone:
@@ -692,6 +722,8 @@ class Session(Handlers):
         if target is None:
             return
         g = self.game
+        if not g.players[target].alive:               # すでに死んでいる(別の襲撃などで)
+            return
         await self.kill(target)
         await self.to_heaven(f"🐱 猫又 {g.players[uid].name} の道連れ: {g.players[target].name}({g.players[target].role})")
 
