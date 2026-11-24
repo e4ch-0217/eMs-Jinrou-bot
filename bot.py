@@ -27,6 +27,7 @@ class JinroBot(discord.Client):
         intents = discord.Intents.default()
         intents.members = True        # 参加者のVC状態を見るため(Developer Portal でオンにする)
         intents.voice_states = True
+        intents.message_content = True   # 密談の発言を天国に出すため(Developer Portal でオンにする)
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.games: dict[int, Session] = {}
@@ -42,6 +43,13 @@ class JinroBot(discord.Client):
 
     async def on_ready(self) -> None:
         log.info("ログインしました: %s", self.user)
+
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot or message.guild is None:
+            return
+        s = self.games.get(message.guild.id)
+        if s is not None:
+            await s.on_secret_message(message)
 
     async def on_voice_state_update(self, member: discord.Member, before, after) -> None:
         s = self.games.get(member.guild.id)
@@ -140,6 +148,18 @@ jinro = app_commands.Group(name="jinro", description="人狼ゲームの操作",
 
 @jinro.command(name="create", description="参加者を募集します(主催者はゲーム用のVCに入ってから実行)")
 async def create(interaction: discord.Interaction):
+    await create_lobby(interaction)
+
+
+wolf_group = app_commands.Group(name="wolf", description="ワードウルフ")
+
+
+@wolf_group.command(name="create", description="ワードウルフの参加者を募集します(主催者はゲーム用のVCに入ってから実行)")
+async def wolf_create(interaction: discord.Interaction):
+    await create_lobby(interaction, wordwolf=True)
+
+
+async def create_lobby(interaction: discord.Interaction, wordwolf: bool = False):
     if client.games.get(interaction.guild_id):
         await interaction.response.send_message(
             "このサーバーではすでにゲームの準備中か進行中です。`/jinro stop` で中止できます。", ephemeral=True)
@@ -155,6 +175,8 @@ async def create(interaction: discord.Interaction):
 
     game = Game(interaction.guild_id, interaction.channel_id, interaction.user.id)
     game.add_player(interaction.user.id, interaction.user.display_name)
+    if wordwolf:
+        game.mode_override = Mode.WORDWOLF
     session = Session(client, interaction.guild, interaction.channel, voice.channel, game,
                       client.store, interaction.user.display_name)
     client.games[interaction.guild_id] = session
@@ -268,6 +290,7 @@ async def stop(interaction: discord.Interaction):
     app_commands.Choice(name="自動(人数で決める)", value="auto"),
     app_commands.Choice(name="簡略化人狼にする", value="one_night"),
     app_commands.Choice(name="ワンナイト人狼にする", value="note"),
+    app_commands.Choice(name="ワードウルフにする", value="wordwolf"),
 ])
 async def mode_command(interaction: discord.Interaction, choice: app_commands.Choice[str]):
     s = client.games.get(interaction.guild_id)
@@ -277,7 +300,10 @@ async def mode_command(interaction: discord.Interaction, choice: app_commands.Ch
     if interaction.user.id != s.game.host_id:
         await interaction.response.send_message("主催者だけが変更できます。", ephemeral=True)
         return
-    if choice.value == "note":
+    if choice.value == "wordwolf":
+        s.game.mode_override = Mode.WORDWOLF
+        text = "モードを**ワードウルフ**にしました(お題が違う人を当てるゲームです)。"
+    elif choice.value == "note":
         s.game.mode_override = Mode.NOTE
         text = "モードを**ワンナイト人狼**にしました(noteのルールで遊びます)。\nルール: https://note.com/1nwerewolf/n/n446a1fde2286"
     elif choice.value == "one_night":
@@ -346,6 +372,7 @@ async def season_reset(interaction: discord.Interaction, record: app_commands.Ch
 
 client.tree.add_command(season)
 client.tree.add_command(jinro)
+client.tree.add_command(wolf_group)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ EXTEND_SECONDS = 60          # 延長1回の長さ
 EXTEND_MAX = 4               # 延長は1試合4回まで(時短は無制限)
 
 NOTE_VOTE_SECONDS = 60       # ワンナイト人狼の投票の時間
+WORDWOLF_VOTE_SECONDS = 60   # ワードウルフの投票の時間
 VOTE_GRACE_SECONDS = 10      # 「投票が始まります」の猶予(ここで1番手に割り込める)
 VOTE_CONFIRM_SECONDS = 30    # 自分の番で、投票先を確定するまでの時間
 VOTE_SPEECH_SECONDS = 20     # 投票のスピーチ

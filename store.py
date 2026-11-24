@@ -22,7 +22,29 @@ class Store:
             "CREATE TABLE IF NOT EXISTS seasons ("
             " id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL,"
             " created_at TEXT NOT NULL, ranking TEXT NOT NULL)")
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS used_topic_keys ("
+            " guild_id INTEGER NOT NULL, topic_key TEXT NOT NULL,"
+            " PRIMARY KEY (guild_id, topic_key))")
         self.conn.commit()
+
+    def used_topics(self, guild_id: int) -> set[str]:
+        """ワードウルフで、このサーバーで一度出たお題の名前。"""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT topic_key FROM used_topic_keys WHERE guild_id=?", (guild_id,)).fetchall()
+        return {r[0] for r in rows}
+
+    def mark_topic_used(self, guild_id: int, topic_key: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO used_topic_keys (guild_id, topic_key) VALUES (?, ?)", (guild_id, topic_key))
+            self.conn.commit()
+
+    def reset_topics(self, guild_id: int) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM used_topic_keys WHERE guild_id=?", (guild_id,))
+            self.conn.commit()
 
     def reset_season(self, guild_id: int, record: bool) -> int:
         """全員の残高を初期値に戻す。record が True なら、リセット前のランキングを seasons に残す。戻り値は人数。"""

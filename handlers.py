@@ -21,6 +21,9 @@ class Handlers:
     def role_text(self, uid: int) -> str:
         g = self.game
         p = g.players[uid]
+        if g.mode == Mode.WORDWOLF:          # 役職(人狼か市民か)は見せず、お題だけを見せる
+            return (f"🔤 あなたのお題は **{g.words.get(uid, '?')}** です。\n\n"
+                    "同じお題の人が多いです。話し合って、お題が違うと思う人に投票してください。")
         role = ROLES[p.role]
         text = f"{role.emoji} あなたの役職は **{role.name}** です({g.mode.value})。\n\n{role.description}"
         if p.role in ATTACKERS:

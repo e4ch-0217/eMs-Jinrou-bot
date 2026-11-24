@@ -11,12 +11,15 @@ import discord
 
 import config as C
 import points
+import wordwolf
 from game import MIN_PLAYERS, PEACE_VOTE, RESULT_LABEL, Game, Mode, Phase
 from handlers import Handlers
 import note_rules as NR
 from roles import ATTACKERS, ROLES, SURVEY_ROLES, WOLF_CHAT_ROLES
+
+SECRET_NOTICE = "👀 天国から見えてますよ。ここでの発言は、天国にも出ます。"   # 密談の部屋の最初に書く
 from collections import Counter
-from views import (COView, CloseNowView, SpectateView, ConfirmVoteView, DayView, GameView, HopeView, JumpView, NightView,
+from views import (COView, CloseNowView, WordVoteView, SpectateView, ConfirmVoteView, DayView, GameView, HopeView, JumpView, NightView,
                    NoteVoteView, SpeakEndView, TieVoteView)
 
 log = logging.getLogger("jinro")
@@ -73,6 +76,8 @@ class Session(Handlers):
         self.pact_channels: dict[int, discord.TextChannel] = {}   # 盟約者ごとの2人だけの部屋
         self.pact_members: dict[int, int] = {}      # 盟約者 -> いまの盟約先
         self.acting: dict[int, int] = {}            # テスト用: 管理者 -> 今その人として操作している人
+        self.ww_votes: dict[int, int] = {}          # ワードウルフの投票: 投票者 -> 投票先
+        self.ww_done: asyncio.Event | None = None   # 全員が投票したら知らせる
         self.seer_results: dict[int, list[str]] = {}   # 占い師ごとの、夜の結果の記録(役職を確認で見られる)
         self.medium_text: str | None = None
 
@@ -190,6 +195,28 @@ class Session(Handlers):
             with contextlib.suppress(discord.HTTPException):
                 await self.heaven.send(text)
 
+    def secret_channel_ids(self) -> set[int]:
+        """密談の部屋(人狼の巣・共有者の巣・盟約の部屋)のID。"""
+        ids = {c.id for c, _ in self.share_channels} | {c.id for c in self.pact_channels.values()}
+        if self.wolf_channel:
+            ids.add(self.wolf_channel.id)
+        return ids
+
+    async def on_secret_message(self, message: discord.Message) -> None:
+        """密談の部屋での発言を、天国にもそのまま出す。"""
+        if message.channel.id not in self.secret_channel_ids() or not message.content:
+            return
+        p = self.game.players.get(message.author.id)
+        role = p.role if p else "不明"
+        await self.to_heaven_quiet(
+            f"💬 **{message.author.display_name}**({role}) from 密談[{message.channel.name}]: {message.content}")
+
+    async def to_heaven_quiet(self, text: str) -> None:
+        """メンションで通知を鳴らさずに、天国に出す。"""
+        if self.heaven:
+            with contextlib.suppress(discord.HTTPException):
+                await self.heaven.send(text[:1900], allowed_mentions=discord.AllowedMentions.none())
+
     def majority(self) -> int:
         return len(self.game.alive_players()) // 2 + 1
 
@@ -236,7 +263,7 @@ class Session(Handlers):
             await interaction.followup.send(f"⚠️ {err}", ephemeral=True)
             return
         self.started = True
-        fee = points.fee_for(g.one_night)
+        fee = 0 if g.mode == Mode.WORDWOLF else points.fee_for(g.one_night)   # ワードウルフは参加費なし
         self.payers = {uid for uid in g.players if self.store.balance(self.guild.id, uid) >= fee}
         for uid in self.payers:
             self.store.add(self.guild.id, uid, -fee)
@@ -297,6 +324,8 @@ class Session(Handlers):
                     topic="人狼だけの相談部屋(夜だけ書き込めます)")
                 # できたことに気づけるよう、見られる人をメンションする
                 mentions = " ".join(m.mention for w in wolves if (m := self.member(w.user_id)))
+                with contextlib.suppress(discord.HTTPException):
+                    await self.wolf_channel.send(SECRET_NOTICE)
                 if mentions:
                     with contextlib.suppress(discord.HTTPException):
                         await self.wolf_channel.send(f"🐺 **人狼の巣**ができました。{mentions}")
@@ -315,6 +344,8 @@ class Session(Handlers):
                     f"共有者の巣{len(self.share_channels) + 1}", category=self.channel.category,
                     overwrites=overwrites, topic="組の2人だけの相談部屋(夜だけ書き込めます)")
                 self.share_channels.append((channel, (uid, other)))
+                with contextlib.suppress(discord.HTTPException):
+                    await channel.send(SECRET_NOTICE)
         except discord.HTTPException:
             await self.channel.send("⚠️ チャンネルを作れませんでした。天国と相談部屋なしで進めます。")
         if self.heaven:
@@ -336,6 +367,16 @@ class Session(Handlers):
             await self.setup_game_channel()
             if g.mode == Mode.NOTE:
                 g.assign_note_roles()                       # ワンナイト人狼: 希望役職はなし
+            elif g.mode == Mode.WORDWOLF:
+                topics = wordwolf.load_topics()             # お題ファイルを読む(追加したお題もすぐ使われる)
+                used = self.store.used_topics(self.guild.id)
+                if all(wordwolf.topic_key(t) in used for t in topics):   # 全部出たら、もう一周する
+                    self.store.reset_topics(self.guild.id)
+                    used = set()
+                key, common, odd = wordwolf.pick_topic(topics, used)   # ワードウルフ: お題を配る(希望役職はなし)
+                self.store.mark_topic_used(self.guild.id, key)
+                for p in g.players.values():
+                    g.words[p.user_id] = odd if p.role == "人狼" else common
             else:
                 await self.hope_phase()
             self.roles_ready = True
@@ -345,7 +386,11 @@ class Session(Handlers):
             await self.sweep_absent()
             if self.finished:
                 return
-            if g.mode == Mode.NOTE:
+            if g.mode == Mode.WORDWOLF:
+                g.day = 1
+                await self.discussion()
+                winner = await self.wordwolf_vote()
+            elif g.mode == Mode.NOTE:
                 g.day = 1
                 await self.note_night()
                 await self.discussion()
@@ -394,6 +439,13 @@ class Session(Handlers):
     def game_embed(self) -> discord.Embed:
         g = self.game
         seats = " → ".join(g.players[u].name for u in g.seats)
+        if g.mode == Mode.WORDWOLF:
+            return discord.Embed(
+                title=f"🎮 {g.mode.value} 開始!",
+                description=(f"参加者: {len(g.players)}人\n席順: {seats}\n\n"
+                             "「役職を確認」: 自分のお題が、自分にだけ見えます\n"
+                             "話し合いのあと、お題が違うと思う人に投票します。"),
+                color=discord.Color.dark_red())
         return discord.Embed(
             title=f"🎮 {g.mode.value} 開始!",
             description=(f"参加者: {len(g.players)}人\n役職構成: {g.composition_label()}\n"
@@ -481,7 +533,7 @@ class Session(Handlers):
                         f"盟約の部屋{len(self.pact_channels) + 1}", category=self.channel.category,
                         overwrites=overwrites, topic="盟約者と盟約先の2人だけの部屋")
                     self.pact_channels[uid] = channel
-                    text = "🤝 盟約の部屋です。この部屋は、盟約者と盟約先の2人だけが見られます。"
+                    text = f"🤝 盟約の部屋です。この部屋は、盟約者と盟約先の2人だけが見られます。\n{SECRET_NOTICE}"
                 else:
                     if old is not None and old != partner and self.member(old):
                         await channel.set_permissions(self.member(old), overwrite=None)
@@ -1009,6 +1061,33 @@ class Session(Handlers):
         await self.reveal_night_replies()
         await asyncio.sleep(C.RESULT_DELAY)
 
+    async def wordwolf_vote(self) -> str:
+        """ワードウルフの投票。一番多く入った人が追放される。戻り値は勝った陣営。"""
+        g = self.game
+        g.phase = Phase.VOTE
+        self.ww_votes = {}
+        self.ww_done = asyncio.Event()
+        await self.apply_voice("silent")
+        msg = await self.channel.send(embed=discord.Embed(
+            title=f"🗳️ 投票({C.WORDWOLF_VOTE_SECONDS}秒)",
+            description="ボタンを押して、お題が違うと思う人に投票してください。\n(投票は、時間内なら変えられます)",
+            color=discord.Color.red()), view=WordVoteView(self))
+        await wait_event(self.ww_done, C.WORDWOLF_VOTE_SECONDS)
+        with contextlib.suppress(discord.HTTPException):
+            await msg.edit(view=None)
+        wolf = next((u for u, p in g.players.items() if p.role == "人狼"), None)
+        counts = Counter(self.ww_votes.values())
+        lines = [f"・{g.players[t].name}: {c}票" for t, c in counts.most_common()] or ["(投票なし)"]
+        executed, winner = wordwolf.decide(self.ww_votes, wolf)
+        if executed is not None:
+            await self.channel.send("📊 投票結果\n" + "\n".join(lines)
+                                    + f"\n\n⚖️ 追放: **{g.players[executed].name}**")
+            g.kill(executed)
+        else:
+            await self.channel.send("📊 投票結果\n" + "\n".join(lines)
+                                    + "\n\n票が同じか、投票がなかったため、追放はありません。")
+        return winner
+
     async def note_vote(self) -> str:
         """投票(1人1票)。戻り値は勝った陣営("village" / "wolf" / "all")。"""
         g, note = self.game, self.game.note
@@ -1048,13 +1127,19 @@ class Session(Handlers):
         g = self.game
         g.phase = Phase.ENDED
         self.finished = True
-        s = g.settlement(winner, self.payers)
-        for uid, amount in s.final.items():
-            self.store.add(self.guild.id, uid, amount)
         title = {"village": "🏘️ 村人陣営の勝利!", "wolf": "🐺 人狼陣営の勝利!",
                  "all": "🕊️ 平和村! 全員の勝利"}[winner]
         embed = discord.Embed(title=title, description="**全員の役職**\n" + g.role_summary(),
                               color=discord.Color.green())
+        if g.mode == Mode.WORDWOLF:                  # ワードウルフは、ポイントなし
+            embed.add_field(name="🔤 お題", value=f"村人: {next((w for u, w in g.words.items() if g.players[u].role == '市民'), '')} / "
+                                                  f"人狼: {next((w for u, w in g.words.items() if g.players[u].role == '人狼'), '')}", inline=False)
+            embed.add_field(name="🧹 チャンネルについて", value=self.close_note(), inline=False)
+            await self.channel.send(embed=embed, view=CloseNowView(self))
+            return
+        s = g.settlement(winner, self.payers)
+        for uid, amount in s.final.items():
+            self.store.add(self.guild.id, uid, amount)
         lines = [f"・{g.players[u].name}{'' if u in self.payers else '(免除)'}"
                  f"{'(突然死)' if g.players[u].quit_early else ''}{'(退出)' if g.players[u].left else ''}"
                  f"{'(拡張役職×' + str(points.EXTRA_ROLE_WIN_MULT) + ')' if ROLES[g.players[u].role].extra and not g.one_night and g.team_of(g.players[u]) == winner else ''}"
@@ -1066,7 +1151,7 @@ class Session(Handlers):
         await self.channel.send(embed=embed, view=CloseNowView(self))
 
     def refund(self) -> None:
-        if self.started and not self.finished:
+        if self.started and not self.finished and self.game.mode != Mode.WORDWOLF:
             fee = points.fee_for(self.game.one_night)
             for uid in self.payers:
                 self.store.add(self.guild.id, uid, fee)

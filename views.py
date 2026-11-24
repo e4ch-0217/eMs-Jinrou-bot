@@ -428,6 +428,36 @@ class SettingView(discord.ui.View):
         await self._refresh(interaction, "役職構成を自動(人数に合わせる)に戻しました。")
 
 
+# ---------- ワードウルフの投票 ----------
+
+class WordVoteView(discord.ui.View):
+    """公開の投票ボタン。押した人は、自分だけに見える候補から1人を選ぶ。"""
+
+    def __init__(self, session):
+        super().__init__(timeout=None)
+        self.session = session
+
+    @discord.ui.button(label="投票する", style=discord.ButtonStyle.danger, emoji="🗳️")
+    async def vote(self, interaction: discord.Interaction, button: discord.ui.Button):
+        s = self.session
+        uid = s.actor(interaction.user.id)
+        g = s.game
+        if uid not in g.players or not g.players[uid].alive:
+            await interaction.response.send_message("投票できるのは、参加者だけです。", ephemeral=True)
+            return
+        candidates = [(t.user_id, t.name) for t in g.alive_players() if t.user_id != uid]
+
+        async def on_pick(i: discord.Interaction, target: int) -> None:
+            s.ww_votes[uid] = target
+            await i.response.edit_message(content=f"🗳️ **{g.players[target].name}** に投票しました。(変えられます)", view=None)
+            alive = [t.user_id for t in g.alive_players()]
+            if s.ww_done and all(a in s.ww_votes for a in alive):
+                s.ww_done.set()
+
+        await interaction.response.send_message(
+            "投票先を選んでください。", view=PickView(candidates, on_pick, "投票先を選ぶ"), ephemeral=True)
+
+
 # ---------- テスト用(管理者が、テストの人として操作する) ----------
 
 def panel_text(session, admin_id: int) -> str:

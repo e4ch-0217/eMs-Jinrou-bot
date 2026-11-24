@@ -32,6 +32,7 @@ class Mode(Enum):
     FULL = "人狼ゲーム"
     ONE_NIGHT = "簡略化人狼"
     NOTE = "ワンナイト人狼"
+    WORDWOLF = "ワードウルフ"
 
 
 @dataclass
@@ -93,6 +94,7 @@ class Game:
         self.survey: dict[int, int] = {}           # 怪しい人アンケート: 回答者 -> 指名した人
         self.survey_notes: dict[int, str] = {}     # 狂人の一言: 回答者 -> 一言
         self.new_pacts: list[int] = []             # 今夜、盟約を結んだ盟約者(チャンネル作成用)
+        self.words: dict[int, str] = {}            # ワードウルフ: 人ごとのお題
         # ゲームごとの設定(/jinro options で、募集中だけ変えられる。次のゲームでは初期値に戻る)
         self.allow_consecutive_guard = False       # 連続ガードを許可するか(初期値は禁止)
         self.first_night_divine = "random"         # 初日の占い: "random"(ランダムな白を伝える) / "choose"(占う相手を選ぶ)
@@ -149,11 +151,15 @@ class Game:
         return self.mode in (Mode.ONE_NIGHT, Mode.NOTE)
 
     def composition(self) -> dict[str, int]:
+        if self.preview_mode() == Mode.WORDWOLF:
+            return {"人狼": 1, "市民": max(0, len(self.players) - 1)}
         if self.custom_composition:
             return dict(self.custom_composition)
         return default_composition(len(self.players), self.preview_mode() == Mode.ONE_NIGHT)
 
     def composition_error(self) -> str | None:
+        if self.preview_mode() == Mode.WORDWOLF:
+            return "ワードウルフは3人以上で遊べます。" if len(self.players) < 3 else None
         if self.preview_mode() == Mode.NOTE:
             if len(self.players) > NR.MAX_PLAYERS:
                 return f"ワンナイト人狼は{NR.MAX_PLAYERS}人までです(現在{len(self.players)}人)。"
